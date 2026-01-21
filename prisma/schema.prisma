@@ -1,0 +1,83 @@
+// Payment Approval App - Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  department  String
+  createdAt   DateTime @default(now())
+  
+  // Relations
+  requestsCreated   PaymentRequest[] @relation("Requester")
+  requestsToApprove PaymentRequest[] @relation("CurrentApprover")
+  approvalActions   ApprovalStep[]
+}
+
+model PaymentRequest {
+  id            String   @id @default(cuid())
+  
+  // Invoice details
+  vendorName    String
+  invoiceNumber String
+  invoiceDate   DateTime
+  amount        Float
+  currency      String   @default("ZAR")
+  description   String?
+  
+  // VAT details
+  vatCharged        Boolean @default(false)
+  internalVatNumber String?
+  externalVatNumber String?
+  
+  // Workflow
+  status        String   @default("draft") // draft, pending, approved, rejected
+  
+  requesterId       String
+  requester         User   @relation("Requester", fields: [requesterId], references: [id])
+  
+  currentApproverId String?
+  currentApprover   User?  @relation("CurrentApprover", fields: [currentApproverId], references: [id])
+  
+  // Relations
+  documents       Document[]
+  approvalHistory ApprovalStep[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  name      String
+  mimeType  String
+  size      Int
+  path      String   // File system path in /uploads
+  
+  requestId String
+  request   PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  
+  uploadedAt DateTime @default(now())
+}
+
+model ApprovalStep {
+  id         String   @id @default(cuid())
+  
+  status     String   // pending, approved, rejected
+  comments   String?
+  
+  approverId String
+  approver   User   @relation(fields: [approverId], references: [id])
+  
+  requestId  String
+  request    PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  
+  actionedAt DateTime @default(now())
+}
