@@ -32,6 +32,11 @@ export interface ExtractedInvoiceData {
     amount?: number;
     vatCharged?: boolean;
     externalVatNumber?: string;
+    internalVatNumber?: string;
+    vatAmount?: number;
+    vatExclusive?: number;
+    vatInclusive?: number;
+    description?: string;
 }
 
 // API response types

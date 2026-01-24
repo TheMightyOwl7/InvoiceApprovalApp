@@ -37,11 +37,15 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
         const fileBuffer = await readFile(filePath);
 
+        const { searchParams } = new URL(request.url);
+        const isPreview = searchParams.get('preview') === 'true';
+        const disposition = isPreview ? 'inline' : 'attachment';
+
         return new NextResponse(fileBuffer, {
             status: 200,
             headers: {
                 'Content-Type': document.mimeType,
-                'Content-Disposition': `attachment; filename="${document.name}"`,
+                'Content-Disposition': `${disposition}; filename="${document.name}"`,
                 'Content-Length': document.size.toString(),
             },
         });

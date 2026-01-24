@@ -91,18 +91,59 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         // Update request status and approver
         let newStatus = paymentRequest.status;
         let newApproverId: string | null = paymentRequest.currentApproverId;
+        let newStepIndex = paymentRequest.currentStepIndex;
 
-        if (action === 'approve') {
-            // Final approval
-            newStatus = 'approved';
-            newApproverId = null;
-        } else if (action === 'reject') {
+        if (action === 'reject') {
             newStatus = 'rejected';
             newApproverId = null;
         } else if (action === 'forward') {
-            // Forward to next approver - stay pending
+            // Manual forward - stay pending
             newStatus = 'pending';
             newApproverId = nextApproverId;
+        } else if (action === 'approve') {
+            if (paymentRequest.workflowId) {
+                // Get workflow details
+                const workflow = await prisma.workflow.findUnique({
+                    where: { id: paymentRequest.workflowId },
+                    include: { steps: { orderBy: { order: 'asc' } } }
+                });
+
+                if (workflow && workflow.steps.length > 0) {
+                    // Find only steps that meet the amount requirement
+                    const activeSteps = workflow.steps.filter(s => paymentRequest.amount >= s.minAmount);
+
+                    // The current step's position in the active steps
+                    const currentActiveIdx = activeSteps.findIndex(s => s.order === paymentRequest.currentStepIndex);
+                    const isFinalStep = currentActiveIdx === -1 || currentActiveIdx >= activeSteps.length - 1;
+
+                    if (isFinalStep) {
+                        // Final step - grant approval
+                        newStatus = 'approved';
+                        newApproverId = null;
+                    } else {
+                        // Intermediate step - find the NEXT active step
+                        const nextStep = activeSteps[currentActiveIdx + 1];
+
+                        if (!nextApproverId) {
+                            return NextResponse.json(
+                                { success: false, error: `Workflow requires forwarding to the next level: ${nextStep.roleRequirement}` },
+                                { status: 400 }
+                            );
+                        }
+                        newStatus = 'pending';
+                        newApproverId = nextApproverId;
+                        newStepIndex = nextStep.order;
+                    }
+                } else {
+                    // Fallback for missing workflow or steps
+                    newStatus = 'approved';
+                    newApproverId = null;
+                }
+            } else {
+                // No workflow - simple approval
+                newStatus = 'approved';
+                newApproverId = null;
+            }
         }
 
         const updated = await prisma.paymentRequest.update({
@@ -110,6 +151,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
             data: {
                 status: newStatus,
                 currentApproverId: newApproverId,
+                currentStepIndex: newStepIndex,
             },
             include: {
                 requester: true,

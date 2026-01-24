@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { getCurrentUser, setCurrentUser, type CurrentUserContext } from '@/lib/storage';
 
 interface User {
     id: string;
@@ -22,6 +23,61 @@ const initialFormData: FormData = {
     department: '',
 };
 
+function UserNode({
+    user,
+    isExec = false,
+    isActive = false,
+    onEdit,
+    onDelete,
+    onSelect,
+    getInitials
+}: {
+    user: User;
+    isExec?: boolean;
+    isActive?: boolean;
+    onEdit: (u: User) => void;
+    onDelete: (u: User) => void;
+    onSelect: (u: User) => void;
+    getInitials: (n: string) => string;
+}) {
+    return (
+        <div className={`user-node ${isExec ? 'exec' : ''} ${isActive ? 'active' : ''}`}>
+            {isActive && <div className="current-badge">Current</div>}
+            <div className="user-node-avatar">
+                {getInitials(user.name)}
+            </div>
+            <div className="user-node-info">
+                <div className="user-node-name">{user.name}</div>
+                <div className="user-node-email">{user.email}</div>
+            </div>
+            <div className="user-node-actions">
+                <button
+                    className="btn btn-sm btn-icon btn-success"
+                    onClick={() => onSelect(user)}
+                    title="Select as demo user"
+                    style={{ background: 'var(--color-success)', color: 'white' }}
+                >
+                    🔑
+                </button>
+                <button
+                    className="btn btn-sm btn-icon btn-secondary"
+                    onClick={() => onEdit(user)}
+                    title="Edit"
+                >
+                    ✏️
+                </button>
+                <button
+                    className="btn btn-sm btn-icon btn-danger"
+                    onClick={() => onDelete(user)}
+                    title="Delete"
+                >
+                    🗑️
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function UsersPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
@@ -30,9 +86,12 @@ export default function UsersPage() {
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [formData, setFormData] = useState<FormData>(initialFormData);
     const [saving, setSaving] = useState(false);
+    const [activeUserId, setActiveUserId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchUsers();
+        const current = getCurrentUser();
+        if (current) setActiveUserId(current.userId);
     }, []);
 
     async function fetchUsers() {
@@ -127,6 +186,56 @@ export default function UsersPage() {
         }
     }
 
+    function handleSelectUser(user: User) {
+        const userContext: CurrentUserContext = {
+            userId: user.id,
+            userName: user.name,
+        };
+        setCurrentUser(userContext);
+        setActiveUserId(user.id);
+        // Refresh to update entire app context
+        window.location.reload();
+    }
+
+    function getInitials(name: string) {
+        return name
+            .split(' ')
+            .map(part => part[0])
+            .join('')
+            .toUpperCase()
+            .slice(0, 2);
+    }
+
+    function getSeniorityRank(name: string): number {
+        if (name.includes('(Exec)')) return 0;
+        if (name.toLowerCase().includes('exec')) return 0;
+        if (name.includes('(Sr. Manager)')) return 1;
+        if (name.toLowerCase().includes('senior manager')) return 1;
+        if (name.includes('(Manager)')) return 2;
+        if (name.toLowerCase().includes('manager')) return 2;
+        if (name.includes('(Senior)')) return 3;
+        if (name.toLowerCase().includes('senior')) return 3;
+        return 4; // Junior or default
+    }
+
+    // Grouping logic
+    const departments = Array.from(new Set(users.map(u => u.department))).sort();
+
+    const usersByDepartment = departments.reduce((acc, dept) => {
+        const deptUsers = users.filter(u => u.department === dept);
+
+        // Sort within department: Exec > Senior > Junior
+        deptUsers.sort((a, b) => {
+            const rankA = getSeniorityRank(a.name);
+            const rankB = getSeniorityRank(b.name);
+            if (rankA !== rankB) return rankA - rankB;
+            return a.name.localeCompare(b.name);
+        });
+
+        acc[dept] = deptUsers;
+        return acc;
+    }, {} as Record<string, User[]>);
+
     return (
         <div>
             <div className="page-header">
@@ -136,13 +245,13 @@ export default function UsersPage() {
                 </button>
             </div>
 
-            <div className="card">
-                <div className="card-body">
-                    {loading ? (
-                        <div className="empty-state">
-                            <p>Loading users...</p>
-                        </div>
-                    ) : users.length === 0 ? (
+            {loading ? (
+                <div className="empty-state">
+                    <p>Loading users...</p>
+                </div>
+            ) : users.length === 0 ? (
+                <div className="card">
+                    <div className="card-body">
                         <div className="empty-state">
                             <div className="empty-state-icon">👥</div>
                             <div className="empty-state-title">No users yet</div>
@@ -151,51 +260,122 @@ export default function UsersPage() {
                                 ➕ Add First User
                             </button>
                         </div>
-                    ) : (
-                        <div className="table-wrapper">
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Email</th>
-                                        <th>Department</th>
-                                        <th>Created</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {users.map((user) => (
-                                        <tr key={user.id}>
-                                            <td style={{ fontWeight: 500 }}>{user.name}</td>
-                                            <td>{user.email}</td>
-                                            <td>{user.department}</td>
-                                            <td className="text-muted text-sm">
-                                                {new Date(user.createdAt).toLocaleDateString()}
-                                            </td>
-                                            <td>
-                                                <div className="table-actions">
-                                                    <button
-                                                        className="btn btn-sm btn-secondary"
-                                                        onClick={() => openEditModal(user)}
-                                                    >
-                                                        ✏️ Edit
-                                                    </button>
-                                                    <button
-                                                        className="btn btn-sm btn-danger"
-                                                        onClick={() => handleDelete(user)}
-                                                    >
-                                                        🗑️ Delete
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
+                    </div>
                 </div>
-            </div>
+            ) : (
+                <div className="department-grid">
+                    {departments.map(dept => (
+                        <div key={dept} className="dept-card">
+                            <div className="dept-header">
+                                <span className="dept-title">{dept}</span>
+                                <span className="dept-count">{usersByDepartment[dept].length} users</span>
+                            </div>
+                            <div className="dept-body">
+                                {/* Executives */}
+                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 0) && (
+                                    <div className="hierarchy-section">
+                                        <div className="hierarchy-label">Leadership</div>
+                                        {usersByDepartment[dept]
+                                            .filter(u => getSeniorityRank(u.name) === 0)
+                                            .map(user => (
+                                                <UserNode
+                                                    key={user.id}
+                                                    user={user}
+                                                    isExec
+                                                    isActive={user.id === activeUserId}
+                                                    onEdit={openEditModal}
+                                                    onDelete={handleDelete}
+                                                    onSelect={handleSelectUser}
+                                                    getInitials={getInitials}
+                                                />
+                                            ))}
+                                    </div>
+                                )}
+
+                                {/* Senior Managers */}
+                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 1) && (
+                                    <div className="hierarchy-section">
+                                        <div className="hierarchy-label">Senior Management</div>
+                                        {usersByDepartment[dept]
+                                            .filter(u => getSeniorityRank(u.name) === 1)
+                                            .map(user => (
+                                                <UserNode
+                                                    key={user.id}
+                                                    user={user}
+                                                    isActive={user.id === activeUserId}
+                                                    onEdit={openEditModal}
+                                                    onDelete={handleDelete}
+                                                    onSelect={handleSelectUser}
+                                                    getInitials={getInitials}
+                                                />
+                                            ))}
+                                    </div>
+                                )}
+
+                                {/* Managers */}
+                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 2) && (
+                                    <div className="hierarchy-section">
+                                        <div className="hierarchy-label">Management</div>
+                                        {usersByDepartment[dept]
+                                            .filter(u => getSeniorityRank(u.name) === 2)
+                                            .map(user => (
+                                                <UserNode
+                                                    key={user.id}
+                                                    user={user}
+                                                    isActive={user.id === activeUserId}
+                                                    onEdit={openEditModal}
+                                                    onDelete={handleDelete}
+                                                    onSelect={handleSelectUser}
+                                                    getInitials={getInitials}
+                                                />
+                                            ))}
+                                    </div>
+                                )}
+
+                                {/* Seniors */}
+                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 3) && (
+                                    <div className="hierarchy-section">
+                                        <div className="hierarchy-label">Senior Staff</div>
+                                        {usersByDepartment[dept]
+                                            .filter(u => getSeniorityRank(u.name) === 3)
+                                            .map(user => (
+                                                <UserNode
+                                                    key={user.id}
+                                                    user={user}
+                                                    isActive={user.id === activeUserId}
+                                                    onEdit={openEditModal}
+                                                    onDelete={handleDelete}
+                                                    onSelect={handleSelectUser}
+                                                    getInitials={getInitials}
+                                                />
+                                            ))}
+                                    </div>
+                                )}
+
+                                {/* Juniors / Others */}
+                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 4) && (
+                                    <div className="hierarchy-section">
+                                        <div className="hierarchy-label">Team Members</div>
+                                        {usersByDepartment[dept]
+                                            .filter(u => getSeniorityRank(u.name) === 4)
+                                            .map(user => (
+                                                <UserNode
+                                                    key={user.id}
+                                                    user={user}
+                                                    isActive={user.id === activeUserId}
+                                                    onEdit={openEditModal}
+                                                    onDelete={handleDelete}
+                                                    onSelect={handleSelectUser}
+                                                    getInitials={getInitials}
+                                                />
+                                            ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {/* Add/Edit Modal */}
             {showModal && (

@@ -46,6 +46,12 @@ interface PaymentRequest {
     currentApprover: User | null;
     documents: Document[];
     approvalHistory: ApprovalStep[];
+    workflowId: string | null;
+    workflow: {
+        name: string;
+        steps: { order: number; roleRequirement: string; name: string | null }[];
+    } | null;
+    currentStepIndex: number;
     createdAt: string;
     updatedAt: string;
 }
@@ -150,6 +156,9 @@ export default function RequestDetailPage({ params }: PageProps) {
     const isCurrentApprover = request?.currentApproverId === currentUser?.userId;
     const canApprove = request?.status === 'pending' && isCurrentApprover;
 
+    const currentWorkflowStep = request?.workflow?.steps.find(s => s.order === request.currentStepIndex);
+    const isFinalWorkflowStep = request?.workflow ? request.currentStepIndex >= request.workflow.steps.length - 1 : true;
+
     function openApprovalModal(action: 'approve' | 'reject' | 'forward') {
         setApprovalAction(action);
         setApprovalComments('');
@@ -168,9 +177,9 @@ export default function RequestDetailPage({ params }: PageProps) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    action: approvalAction,
+                    action: (approvalAction === 'approve' && !isFinalWorkflowStep) ? 'approve' : approvalAction,
                     approverId: currentUser.userId,
-                    nextApproverId: approvalAction === 'forward' ? nextApproverId : undefined,
+                    nextApproverId: (approvalAction === 'forward' || (approvalAction === 'approve' && !isFinalWorkflowStep)) ? nextApproverId : undefined,
                     comments: approvalComments || undefined,
                 }),
             });
@@ -228,6 +237,8 @@ export default function RequestDetailPage({ params }: PageProps) {
             </div>
         );
     }
+    const invoiceDoc = request?.documents.find(d => d.mimeType === 'application/pdf' || d.name.toLowerCase().endsWith('.pdf'));
+    const supportingDocs = request?.documents.filter(d => d.id !== invoiceDoc?.id) || [];
 
     return (
         <div>
@@ -275,7 +286,7 @@ export default function RequestDetailPage({ params }: PageProps) {
                     </div>
                     <div className="flex gap-sm">
                         <button className="btn btn-success" onClick={() => openApprovalModal('approve')}>
-                            ✓ Approve
+                            {isFinalWorkflowStep ? '✓ Approve' : '✓ Forward & Approve'}
                         </button>
                         <button className="btn btn-secondary" onClick={() => openApprovalModal('forward')}>
                             → Forward
@@ -354,17 +365,21 @@ export default function RequestDetailPage({ params }: PageProps) {
                         </div>
                     )}
 
+
+
+
+
                     {/* Documents */}
                     <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
                         <div className="card-header">
-                            <h2 className="card-title">Supporting Documents ({request.documents.length})</h2>
+                            <h2 className="card-title">Supporting Documents ({supportingDocs.length})</h2>
                         </div>
                         <div className="card-body">
-                            {request.documents.length === 0 ? (
-                                <p className="text-muted">No documents attached.</p>
+                            {supportingDocs.length === 0 ? (
+                                <p className="text-muted">No additional documents.</p>
                             ) : (
                                 <div className="file-list">
-                                    {request.documents.map((doc) => (
+                                    {supportingDocs.map((doc) => (
                                         <div key={doc.id} className="file-item">
                                             <span className="file-name">{doc.name}</span>
                                             <span className="file-size">{formatFileSize(doc.size)}</span>
@@ -388,10 +403,45 @@ export default function RequestDetailPage({ params }: PageProps) {
                     {/* Workflow Info */}
                     <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
                         <div className="card-header">
-                            <h2 className="card-title">Workflow</h2>
+                            <h2 className="card-title">Workflow Progress</h2>
                         </div>
                         <div className="card-body">
-                            <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                            {request.workflow ? (
+                                <div className="workflow-steps" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                                    <div className="font-bold text-sm mb-xs">{request.workflow.name}</div>
+                                    {request.workflow.steps.map((step, idx) => (
+                                        <div key={idx} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--spacing-sm)',
+                                            opacity: idx > request.currentStepIndex ? 0.5 : 1
+                                        }}>
+                                            <div style={{
+                                                width: '24px',
+                                                height: '24px',
+                                                borderRadius: '50%',
+                                                background: idx < request.currentStepIndex ? 'var(--color-success)' : idx === request.currentStepIndex ? 'var(--color-primary)' : 'var(--color-neutral-300)',
+                                                color: 'white',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: '0.75rem',
+                                                fontWeight: 'bold'
+                                            }}>
+                                                {idx < request.currentStepIndex ? '✓' : idx + 1}
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <div className="text-sm font-medium">{step.name || `Step ${idx + 1}`}</div>
+                                                <div className="text-xs text-muted">{step.roleRequirement}</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="text-muted text-sm italic">Manual approval (no workflow)</p>
+                            )}
+
+                            <div style={{ marginTop: 'var(--spacing-lg)', paddingTop: 'var(--spacing-md)', borderTop: '1px solid #eee' }}>
                                 <div className="text-sm text-muted">Requested By</div>
                                 <div className="font-bold">{request.requester.name}</div>
                                 <div className="text-xs text-muted">{request.requester.department}</div>
@@ -411,6 +461,29 @@ export default function RequestDetailPage({ params }: PageProps) {
                             </div>
                         </div>
                     </div>
+
+                    {/* PDF Preview */}
+                    {invoiceDoc && (
+                        <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+                            <div className="card-header flex justify-between items-center">
+                                <h2 className="card-title">Invoice Preview</h2>
+                                <a
+                                    href={`/api/documents/${invoiceDoc.id}`}
+                                    className="btn btn-sm btn-secondary"
+                                    download
+                                >
+                                    ⬇ Download
+                                </a>
+                            </div>
+                            <div className="card-body" style={{ padding: 0, overflow: 'hidden' }}>
+                                <iframe
+                                    src={`/api/documents/${invoiceDoc.id}?preview=true#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+                                    style={{ width: '100%', height: '600px', border: 'none' }}
+                                    title="Invoice PDF"
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     {/* Approval History */}
                     <div className="card">
@@ -448,103 +521,107 @@ export default function RequestDetailPage({ params }: PageProps) {
                         </div>
                     </div>
                 </div>
-            </div>
+            </div >
 
             {/* Approval Modal */}
-            {showApprovalModal && (
-                <div
-                    className="modal-overlay"
-                    onClick={(e) => e.target === e.currentTarget && setShowApprovalModal(false)}
-                >
-                    <div className="modal">
-                        <div className="modal-header">
-                            <h2 className="modal-title">
-                                {approvalAction === 'approve' && '✓ Approve Request'}
-                                {approvalAction === 'reject' && '✕ Reject Request'}
-                                {approvalAction === 'forward' && '→ Forward Request'}
-                            </h2>
-                            <button className="modal-close" onClick={() => setShowApprovalModal(false)}>
-                                ×
-                            </button>
-                        </div>
+            {
+                showApprovalModal && (
+                    <div
+                        className="modal-overlay"
+                        onClick={(e) => e.target === e.currentTarget && setShowApprovalModal(false)}
+                    >
+                        <div className="modal">
+                            <div className="modal-header">
+                                <h2 className="modal-title">
+                                    {approvalAction === 'approve' && (isFinalWorkflowStep ? '✓ Final Approval' : '✓ Forward & Approve')}
+                                    {approvalAction === 'reject' && '✕ Reject Request'}
+                                    {approvalAction === 'forward' && '→ Forward Request'}
+                                </h2>
+                                <button className="modal-close" onClick={() => setShowApprovalModal(false)}>
+                                    ×
+                                </button>
+                            </div>
 
-                        <div className="modal-body">
-                            {error && (
-                                <div className="form-error mb-md" style={{
-                                    padding: 'var(--spacing-sm)',
-                                    background: 'var(--color-danger-light)',
-                                    borderRadius: 'var(--radius)',
-                                }}>
-                                    {error}
-                                </div>
-                            )}
+                            <div className="modal-body">
+                                {error && (
+                                    <div className="form-error mb-md" style={{
+                                        padding: 'var(--spacing-sm)',
+                                        background: 'var(--color-danger-light)',
+                                        borderRadius: 'var(--radius)',
+                                    }}>
+                                        {error}
+                                    </div>
+                                )}
 
-                            {approvalAction === 'forward' && (
+                                {(approvalAction === 'forward' || (approvalAction === 'approve' && !isFinalWorkflowStep)) && (
+                                    <div className="form-group">
+                                        <label className="form-label">
+                                            {approvalAction === 'approve' ? 'Forward to next approver *' : 'Forward to *'}
+                                        </label>
+                                        <select
+                                            className="form-select"
+                                            value={nextApproverId}
+                                            onChange={(e) => setNextApproverId(e.target.value)}
+                                            required
+                                        >
+                                            <option value="">Select next approver...</option>
+                                            {users
+                                                .filter((u) => u.id !== currentUser?.userId && u.id !== request.requesterId)
+                                                .map((user) => (
+                                                    <option key={user.id} value={user.id}>
+                                                        {user.name} ({user.department})
+                                                    </option>
+                                                ))}
+                                        </select>
+                                    </div>
+                                )}
+
                                 <div className="form-group">
-                                    <label className="form-label">Forward to *</label>
-                                    <select
-                                        className="form-select"
-                                        value={nextApproverId}
-                                        onChange={(e) => setNextApproverId(e.target.value)}
-                                        required
-                                    >
-                                        <option value="">Select next approver...</option>
-                                        {users
-                                            .filter((u) => u.id !== currentUser?.userId && u.id !== request.requesterId)
-                                            .map((user) => (
-                                                <option key={user.id} value={user.id}>
-                                                    {user.name} ({user.department})
-                                                </option>
-                                            ))}
-                                    </select>
+                                    <label className="form-label">
+                                        Comments {approvalAction === 'reject' ? '*' : '(optional)'}
+                                    </label>
+                                    <textarea
+                                        className="form-textarea"
+                                        value={approvalComments}
+                                        onChange={(e) => setApprovalComments(e.target.value)}
+                                        placeholder={
+                                            approvalAction === 'reject'
+                                                ? 'Please provide a reason for rejection...'
+                                                : 'Add any comments...'
+                                        }
+                                        rows={3}
+                                        required={approvalAction === 'reject'}
+                                    />
                                 </div>
-                            )}
+                            </div>
 
-                            <div className="form-group">
-                                <label className="form-label">
-                                    Comments {approvalAction === 'reject' ? '*' : '(optional)'}
-                                </label>
-                                <textarea
-                                    className="form-textarea"
-                                    value={approvalComments}
-                                    onChange={(e) => setApprovalComments(e.target.value)}
-                                    placeholder={
-                                        approvalAction === 'reject'
-                                            ? 'Please provide a reason for rejection...'
-                                            : 'Add any comments...'
-                                    }
-                                    rows={3}
-                                    required={approvalAction === 'reject'}
-                                />
+                            <div className="modal-footer">
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowApprovalModal(false)}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`btn ${approvalAction === 'reject' ? 'btn-danger' : approvalAction === 'approve' ? 'btn-success' : 'btn-primary'}`}
+                                    onClick={handleApprovalSubmit}
+                                    disabled={processing || ((approvalAction === 'forward' || (approvalAction === 'approve' && !isFinalWorkflowStep)) && !nextApproverId)}
+                                >
+                                    {processing ? 'Processing...' : (
+                                        <>
+                                            {approvalAction === 'approve' && (isFinalWorkflowStep ? '✓ Approve' : '✓ Forward & Approve')}
+                                            {approvalAction === 'reject' && '✕ Reject'}
+                                            {approvalAction === 'forward' && '→ Forward'}
+                                        </>
+                                    )}
+                                </button>
                             </div>
                         </div>
-
-                        <div className="modal-footer">
-                            <button
-                                type="button"
-                                className="btn btn-secondary"
-                                onClick={() => setShowApprovalModal(false)}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className={`btn ${approvalAction === 'reject' ? 'btn-danger' : approvalAction === 'approve' ? 'btn-success' : 'btn-primary'}`}
-                                onClick={handleApprovalSubmit}
-                                disabled={processing || (approvalAction === 'forward' && !nextApproverId)}
-                            >
-                                {processing ? 'Processing...' : (
-                                    <>
-                                        {approvalAction === 'approve' && '✓ Approve'}
-                                        {approvalAction === 'reject' && '✕ Reject'}
-                                        {approvalAction === 'forward' && '→ Forward'}
-                                    </>
-                                )}
-                            </button>
-                        </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }

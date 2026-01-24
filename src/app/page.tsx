@@ -33,15 +33,16 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats>({ pending: 0, approved: 0, rejected: 0, myPendingApproval: 0 });
   const [recentRequests, setRecentRequests] = useState<PaymentRequest[]>([]);
   const [pendingMyApproval, setPendingMyApproval] = useState<PaymentRequest[]>([]);
+  const [currentUser, setCurrentUser] = useState<{ userId: string; userName: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const currentUser = getCurrentUser();
-
   useEffect(() => {
-    fetchDashboardData();
+    const user = getCurrentUser();
+    setCurrentUser(user);
+    fetchDashboardData(user);
   }, []);
 
-  async function fetchDashboardData() {
+  async function fetchDashboardData(user: { userId: string; userName: string } | null) {
     try {
       setLoading(true);
 
@@ -58,8 +59,8 @@ export default function DashboardPage() {
         const rejected = requests.filter(r => r.status === 'rejected').length;
 
         // My pending approvals
-        const myPending = currentUser
-          ? requests.filter(r => r.status === 'pending' && r.currentApprover?.id === currentUser.userId)
+        const myPending = user
+          ? requests.filter(r => r.status === 'pending' && r.currentApprover?.id === user.userId)
           : [];
 
         setStats({

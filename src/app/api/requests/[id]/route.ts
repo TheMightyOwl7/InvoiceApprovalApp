@@ -22,6 +22,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
                     },
                     orderBy: { actionedAt: 'desc' },
                 },
+                workflow: {
+                    include: {
+                        steps: { orderBy: { order: 'asc' } }
+                    }
+                }
             },
         });
 

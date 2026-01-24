@@ -13,12 +13,17 @@ model User {
   name        String
   email       String   @unique
   department  String
+  role        String   @default("user") // user, manager, senior_manager, executive
   createdAt   DateTime @default(now())
   
   // Relations
   requestsCreated   PaymentRequest[] @relation("Requester")
   requestsToApprove PaymentRequest[] @relation("CurrentApprover")
   approvalActions   ApprovalStep[]
+  
+  // Workflow relations
+  createdWorkflows  Workflow[] @relation("WorkflowCreator")
+  approvedWorkflows Workflow[] @relation("WorkflowApprover")
 }
 
 model PaymentRequest {
@@ -46,12 +51,49 @@ model PaymentRequest {
   currentApproverId String?
   currentApprover   User?  @relation("CurrentApprover", fields: [currentApproverId], references: [id])
   
+  // Active workflow tracking
+  workflowId        String?
+  workflow          Workflow? @relation(fields: [workflowId], references: [id])
+  currentStepIndex  Int       @default(0)
+  
   // Relations
   documents       Document[]
   approvalHistory ApprovalStep[]
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Workflow {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("pending_approval") // pending_approval, active, inactive
+  
+  steps       WorkflowStep[]
+  requests    PaymentRequest[]
+  
+  creatorId   String
+  creator     User     @relation("WorkflowCreator", fields: [creatorId], references: [id])
+  
+  approverId  String?
+  approver    User?    @relation("WorkflowApprover", fields: [approverId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model WorkflowStep {
+  id          String   @id @default(cuid())
+  order       Int
+  name        String?
+  
+  // Requirements
+  minAmount   Float    @default(0)
+  roleRequirement String // manager, senior_manager, executive
+  
+  workflowId  String
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 }
 
 model Document {

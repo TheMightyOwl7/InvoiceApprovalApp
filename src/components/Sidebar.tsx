@@ -17,8 +17,10 @@ export default function Sidebar() {
     const [users, setUsers] = useState<User[]>([]);
     const [pendingCount, setPendingCount] = useState(0);
     const [showUserDropdown, setShowUserDropdown] = useState(false);
+    const [isMounted, setIsMounted] = useState(false);
 
     useEffect(() => {
+        setIsMounted(true);
         // Load current user from localStorage
         const user = getCurrentUser();
         setCurrentUserState(user);
@@ -30,6 +32,17 @@ export default function Sidebar() {
         if (user) {
             fetchPendingCount(user.userId);
         }
+
+        // Close dropdown when clicking outside
+        function handleClickOutside(event: MouseEvent) {
+            const footer = document.querySelector('.sidebar-footer');
+            if (footer && !footer.contains(event.target as Node)) {
+                setShowUserDropdown(false);
+            }
+        }
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
     async function fetchUsers() {
@@ -94,6 +107,8 @@ export default function Sidebar() {
     const navItems = [
         { href: '/', label: 'Dashboard', icon: '📊' },
         { href: '/requests', label: 'All Requests', icon: '📋' },
+        { href: '/workflows', label: 'Workflows', icon: '⛓️' },
+        { href: '/monitoring', label: 'Monitoring', icon: '🕵️' },
         { href: '/requests/new', label: 'New Request', icon: '➕' },
         { href: '/requests?filter=pending', label: 'Pending Approval', icon: '⏳', badge: pendingCount },
         { href: '/users', label: 'Manage Users', icon: '👥' },
@@ -127,12 +142,12 @@ export default function Sidebar() {
                     onClick={() => setShowUserDropdown(!showUserDropdown)}
                     style={{ cursor: 'pointer', position: 'relative' }}
                 >
-                    <div className="user-avatar">
-                        {currentUser ? getInitials(currentUser.userName) : '?'}
+                    <div className="user-avatar" style={!isMounted ? { visibility: 'hidden' } : {}}>
+                        {isMounted && currentUser ? getInitials(currentUser.userName) : '?'}
                     </div>
-                    <div className="user-info">
+                    <div className="user-info" style={!isMounted ? { visibility: 'hidden' } : {}}>
                         <div className="user-name">
-                            {currentUser?.userName || 'Select User'}
+                            {isMounted && (currentUser?.userName || 'Select User')}
                         </div>
                         <div className="user-role">Click to switch</div>
                     </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser } from '@/lib/storage';
+import { ExtractedInvoiceData } from '@/lib/types';
 
 interface User {
     id: string;
@@ -21,12 +22,15 @@ interface FormData {
     invoiceNumber: string;
     invoiceDate: string;
     amount: string;
+    vatExclusive: string;
+    vatAmount: string;
     currency: string;
     description: string;
     vatCharged: boolean;
     internalVatNumber: string;
     externalVatNumber: string;
     currentApproverId: string;
+    workflowId: string;
 }
 
 const initialFormData: FormData = {
@@ -34,43 +38,75 @@ const initialFormData: FormData = {
     invoiceNumber: '',
     invoiceDate: '',
     amount: '',
+    vatExclusive: '',
+    vatAmount: '',
     currency: 'ZAR',
     description: '',
     vatCharged: false,
     internalVatNumber: '',
     externalVatNumber: '',
     currentApproverId: '',
+    workflowId: '',
 };
 
 export default function NewRequestPage() {
     const router = useRouter();
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const invoiceInputRef = useRef<HTMLInputElement>(null);
+    const supportingInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState<FormData>(initialFormData);
     const [users, setUsers] = useState<User[]>([]);
-    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    const [activeWorkflows, setActiveWorkflows] = useState<any[]>([]);
+
+    // Invoice file state
+    const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+    const [scanning, setScanning] = useState(false);
+    const [scanWarnings, setScanWarnings] = useState<string[]>([]);
+    const [scannedFields, setScannedFields] = useState<Set<string>>(new Set());
+    const [missingFields, setMissingFields] = useState<Set<string>>(new Set());
+
+    // Supporting documents state
+    const [supportingFiles, setSupportingFiles] = useState<File[]>([]);
     const [uploadedDocs, setUploadedDocs] = useState<Document[]>([]);
+
     const [requestId, setRequestId] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [dragOver, setDragOver] = useState(false);
+    const [invoiceDragOver, setInvoiceDragOver] = useState(false);
+    const [supportingDragOver, setSupportingDragOver] = useState(false);
 
-    const currentUser = getCurrentUser();
+    const [currentUser, setCurrentUser] = useState<{ userId: string; userName: string } | null>(null);
 
     useEffect(() => {
-        fetchUsers();
+        const user = getCurrentUser();
+        setCurrentUser(user);
+        fetchUsers(user?.userId);
+        fetchWorkflows();
     }, []);
 
-    async function fetchUsers() {
+    async function fetchUsers(currentUserId?: string) {
         try {
             const res = await fetch('/api/users');
             const data = await res.json();
             if (data.success) {
-                // Filter out current user from approver list
-                setUsers(data.data.filter((u: User) => u.id !== currentUser?.userId));
+                // Use passed ID or state (though state might not be set yet if called from effect)
+                const idToExclude = currentUserId;
+                setUsers(data.data.filter((u: User) => u.id !== idToExclude));
             }
         } catch (err) {
             console.error('Failed to fetch users:', err);
+        }
+    }
+
+    async function fetchWorkflows() {
+        try {
+            const res = await fetch('/api/workflows?status=active');
+            const data = await res.json();
+            if (data.success) {
+                setActiveWorkflows(data.data);
+            }
+        } catch (err) {
+            console.error('Failed to fetch workflows:', err);
         }
     }
 
@@ -82,25 +118,183 @@ export default function NewRequestPage() {
             ...prev,
             [name]: type === 'checkbox' ? checked : value,
         }));
+
+        // Remove from scanned fields when user manually edits
+        setScannedFields(prev => {
+            const next = new Set(prev);
+            next.delete(name);
+            return next;
+        });
+
+        // Remove from missing fields when user manually edits
+        setMissingFields(prev => {
+            const next = new Set(prev);
+            next.delete(name);
+            return next;
+        });
     }
 
-    function handleFileDrop(e: React.DragEvent) {
+    // Invoice file handling
+    async function handleInvoiceDrop(e: React.DragEvent) {
         e.preventDefault();
-        setDragOver(false);
+        setInvoiceDragOver(false);
 
         const files = Array.from(e.dataTransfer.files);
-        addFiles(files);
-    }
-
-    function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-        if (e.target.files) {
-            const files = Array.from(e.target.files);
-            addFiles(files);
+        if (files.length > 0) {
+            await addInvoiceFile(files[0]);
         }
     }
 
-    function addFiles(files: File[]) {
-        // Filter valid file types
+    async function handleInvoiceSelect(e: React.ChangeEvent<HTMLInputElement>) {
+        if (e.target.files && e.target.files.length > 0) {
+            await addInvoiceFile(e.target.files[0]);
+        }
+    }
+
+    async function addInvoiceFile(file: File) {
+        const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+        if (!validTypes.includes(file.type)) {
+            setError('Invoice must be a PDF or image file.');
+            return;
+        }
+
+        setInvoiceFile(file);
+        setError(null);
+
+        // Automatically scan the invoice
+        await scanInvoiceFile(file);
+    }
+
+    async function scanInvoiceFile(file: File) {
+        setScanning(true);
+        setScanWarnings([]);
+
+        try {
+            const formDataObj = new FormData();
+            formDataObj.append('file', file);
+
+            const res = await fetch('/api/scan', {
+                method: 'POST',
+                body: formDataObj,
+            });
+
+            const data = await res.json();
+
+            if (data.success) {
+                const extracted: ExtractedInvoiceData = data.data;
+                const warnings: string[] = data.warnings || [];
+
+                // Apply extracted data to form
+                const newScannedFields = new Set<string>();
+                const newMissingFields = new Set<string>();
+
+                setFormData(prev => {
+                    const updated = { ...prev };
+
+                    if (extracted.vendorName) {
+                        updated.vendorName = extracted.vendorName;
+                        newScannedFields.add('vendorName');
+                    } else {
+                        newMissingFields.add('vendorName');
+                    }
+
+                    if (extracted.invoiceNumber) {
+                        updated.invoiceNumber = extracted.invoiceNumber;
+                        newScannedFields.add('invoiceNumber');
+                    } else {
+                        newMissingFields.add('invoiceNumber');
+                    }
+
+                    if (extracted.invoiceDate) {
+                        updated.invoiceDate = extracted.invoiceDate;
+                        newScannedFields.add('invoiceDate');
+                    } else {
+                        newMissingFields.add('invoiceDate');
+                    }
+
+                    if (extracted.amount !== undefined) {
+                        updated.amount = extracted.amount.toFixed(2);
+                        newScannedFields.add('amount');
+                    } else {
+                        newMissingFields.add('amount');
+                    }
+
+                    if (extracted.vatExclusive !== undefined) {
+                        updated.vatExclusive = extracted.vatExclusive.toFixed(2);
+                        newScannedFields.add('vatExclusive');
+                    }
+                    if (extracted.vatAmount !== undefined) {
+                        updated.vatAmount = extracted.vatAmount.toFixed(2);
+                        newScannedFields.add('vatAmount');
+                    }
+                    if (extracted.description) {
+                        updated.description = extracted.description;
+                        newScannedFields.add('description');
+                    }
+                    if (extracted.vatCharged !== undefined) {
+                        updated.vatCharged = extracted.vatCharged;
+                        // Force VAT charged to true if we have VAT amounts
+                        if (extracted.vatAmount && extracted.vatAmount > 0) {
+                            updated.vatCharged = true;
+                        }
+                        newScannedFields.add('vatCharged');
+                    }
+                    if (extracted.internalVatNumber) {
+                        updated.internalVatNumber = extracted.internalVatNumber;
+                        newScannedFields.add('internalVatNumber');
+                    }
+                    if (extracted.externalVatNumber) {
+                        updated.externalVatNumber = extracted.externalVatNumber;
+                        newScannedFields.add('externalVatNumber');
+                    } else if (updated.vatCharged) {
+                        newMissingFields.add('externalVatNumber');
+                    }
+
+                    return updated;
+                });
+
+                setScannedFields(newScannedFields);
+                setMissingFields(newMissingFields);
+                setScanWarnings(warnings);
+            } else {
+                setScanWarnings([data.error || 'Failed to scan invoice']);
+            }
+        } catch (err) {
+            console.error('Failed to scan invoice:', err);
+            setScanWarnings(['An error occurred while scanning the invoice']);
+        } finally {
+            setScanning(false);
+        }
+    }
+
+    function removeInvoiceFile() {
+        setInvoiceFile(null);
+        setScanWarnings([]);
+        setScannedFields(new Set());
+        setMissingFields(new Set());
+        if (invoiceInputRef.current) {
+            invoiceInputRef.current.value = '';
+        }
+    }
+
+    // Supporting documents handling
+    function handleSupportingDrop(e: React.DragEvent) {
+        e.preventDefault();
+        setSupportingDragOver(false);
+
+        const files = Array.from(e.dataTransfer.files);
+        addSupportingFiles(files);
+    }
+
+    function handleSupportingSelect(e: React.ChangeEvent<HTMLInputElement>) {
+        if (e.target.files) {
+            const files = Array.from(e.target.files);
+            addSupportingFiles(files);
+        }
+    }
+
+    function addSupportingFiles(files: File[]) {
         const validTypes = [
             'application/pdf',
             'image/jpeg',
@@ -118,11 +312,11 @@ export default function NewRequestPage() {
             setError('Some files were skipped - only PDF, images, Word, and Excel files are allowed.');
         }
 
-        setPendingFiles(prev => [...prev, ...validFiles]);
+        setSupportingFiles(prev => [...prev, ...validFiles]);
     }
 
-    function removeFile(index: number) {
-        setPendingFiles(prev => prev.filter((_, i) => i !== index));
+    function removeSupportingFile(index: number) {
+        setSupportingFiles(prev => prev.filter((_, i) => i !== index));
     }
 
     async function removeUploadedDoc(docId: string) {
@@ -144,55 +338,41 @@ export default function NewRequestPage() {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    async function createDraftRequest(): Promise<string | null> {
-        if (requestId) return requestId;
-
-        if (!currentUser) {
-            setError('Please select a user first (use sidebar dropdown)');
-            return null;
-        }
-
-        try {
-            const res = await fetch('/api/requests', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ...formData,
-                    requesterId: currentUser.userId,
-                    status: 'draft',
-                }),
-            });
-
-            const data = await res.json();
-
-            if (data.success) {
-                setRequestId(data.data.id);
-                return data.data.id;
-            } else {
-                setError(data.error || 'Failed to create draft');
-                return null;
-            }
-        } catch (err) {
-            console.error('Failed to create draft:', err);
-            setError('Failed to create draft request');
-            return null;
-        }
-    }
-
     async function uploadFiles(reqId: string) {
-        for (const file of pendingFiles) {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('requestId', reqId);
+        // Upload invoice file first
+        if (invoiceFile) {
+            const formDataObj = new FormData();
+            formDataObj.append('file', invoiceFile);
+            formDataObj.append('requestId', reqId);
 
             try {
                 const res = await fetch('/api/documents', {
                     method: 'POST',
-                    body: formData,
+                    body: formDataObj,
                 });
 
                 const data = await res.json();
+                if (data.success) {
+                    setUploadedDocs(prev => [...prev, data.data]);
+                }
+            } catch (err) {
+                console.error('Failed to upload invoice:', err);
+            }
+        }
 
+        // Upload supporting files
+        for (const file of supportingFiles) {
+            const formDataObj = new FormData();
+            formDataObj.append('file', file);
+            formDataObj.append('requestId', reqId);
+
+            try {
+                const res = await fetch('/api/documents', {
+                    method: 'POST',
+                    body: formDataObj,
+                });
+
+                const data = await res.json();
                 if (data.success) {
                     setUploadedDocs(prev => [...prev, data.data]);
                 }
@@ -201,7 +381,8 @@ export default function NewRequestPage() {
             }
         }
 
-        setPendingFiles([]);
+        setInvoiceFile(null);
+        setSupportingFiles([]);
     }
 
     async function handleSubmit(e: React.FormEvent, asDraft: boolean = false) {
@@ -230,7 +411,6 @@ export default function NewRequestPage() {
             let reqId = requestId;
 
             if (!reqId) {
-                // Create new request
                 const res = await fetch('/api/requests', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -251,7 +431,6 @@ export default function NewRequestPage() {
                 reqId = data.data.id;
                 setRequestId(reqId);
             } else {
-                // Update existing draft
                 const res = await fetch(`/api/requests/${reqId}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -269,12 +448,11 @@ export default function NewRequestPage() {
                 }
             }
 
-            // Upload any pending files
-            if (pendingFiles.length > 0 && reqId) {
+            // Upload files
+            if ((invoiceFile || supportingFiles.length > 0) && reqId) {
                 await uploadFiles(reqId);
             }
 
-            // Redirect to request list or detail page
             router.push(asDraft ? `/requests/${reqId}` : '/requests');
         } catch (err) {
             console.error('Failed to submit:', err);
@@ -282,6 +460,22 @@ export default function NewRequestPage() {
         } finally {
             setSaving(false);
         }
+    }
+
+    function getFieldStyle(fieldName: string) {
+        if (scannedFields.has(fieldName)) {
+            return {
+                borderColor: 'var(--color-primary)',
+                background: 'rgba(59, 130, 246, 0.05)',
+            };
+        }
+        if (missingFields.has(fieldName)) {
+            return {
+                borderColor: 'var(--color-danger)',
+                background: 'rgba(239, 68, 68, 0.05)',
+            };
+        }
+        return {};
     }
 
     return (
@@ -294,6 +488,7 @@ export default function NewRequestPage() {
                 <div style={{
                     padding: 'var(--spacing-md)',
                     background: 'var(--color-warning-light)',
+                    color: '#333',
                     borderRadius: 'var(--radius)',
                     marginBottom: 'var(--spacing-lg)',
                 }}>
@@ -302,6 +497,109 @@ export default function NewRequestPage() {
             )}
 
             <form onSubmit={(e) => handleSubmit(e, false)}>
+                {/* Invoice Upload Section */}
+                <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+                    <div className="card-header">
+                        <h2 className="card-title">📄 Invoice Document</h2>
+                    </div>
+                    <div className="card-body">
+                        <p className="text-muted mb-md">
+                            Upload your invoice PDF or image to automatically extract details.
+                        </p>
+
+                        {!invoiceFile ? (
+                            <div
+                                className={`upload-zone ${invoiceDragOver ? 'drag-over' : ''}`}
+                                onDragOver={(e) => { e.preventDefault(); setInvoiceDragOver(true); }}
+                                onDragLeave={() => setInvoiceDragOver(false)}
+                                onDrop={handleInvoiceDrop}
+                                onClick={() => invoiceInputRef.current?.click()}
+                                style={{
+                                    borderColor: 'var(--color-primary)',
+                                    background: 'rgba(59, 130, 246, 0.02)',
+                                }}
+                            >
+                                <input
+                                    ref={invoiceInputRef}
+                                    type="file"
+                                    accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
+                                    onChange={handleInvoiceSelect}
+                                    style={{ display: 'none' }}
+                                />
+                                <div className="upload-icon">📄</div>
+                                <p className="upload-text">
+                                    <strong>Click to upload invoice</strong> or drag and drop
+                                </p>
+                                <p className="text-xs text-muted">PDF or image files • Auto-scans to fill form</p>
+                            </div>
+                        ) : (
+                            <div style={{
+                                padding: 'var(--spacing-md)',
+                                background: 'var(--color-neutral-50)',
+                                borderRadius: 'var(--radius)',
+                                border: '1px solid var(--color-neutral-200)',
+                            }}>
+                                <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-sm">
+                                        <span style={{ fontSize: '1.5rem' }}>📄</span>
+                                        <div>
+                                            <div className="font-bold">{invoiceFile.name}</div>
+                                            <div className="text-sm text-muted">{formatFileSize(invoiceFile.size)}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-sm">
+                                        {scanning && (
+                                            <span className="text-sm text-muted">
+                                                ⏳ Scanning...
+                                            </span>
+                                        )}
+                                        {!scanning && scannedFields.size > 0 && (
+                                            <span className="text-sm" style={{ color: 'var(--color-success)' }}>
+                                                ✓ Scanned
+                                            </span>
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="btn btn-sm btn-secondary"
+                                            onClick={removeInvoiceFile}
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Scan Warnings */}
+                        {scanWarnings.length > 0 && (
+                            <div style={{
+                                marginTop: 'var(--spacing-md)',
+                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                background: 'var(--color-warning-light)',
+                                color: '#333',
+                                borderRadius: 'var(--radius)',
+                                border: '1px solid var(--color-warning)',
+                            }}>
+                                <div className="font-bold mb-xs" style={{ color: 'var(--color-warning-dark)' }}>
+                                    ⚠️ Please verify the following:
+                                </div>
+                                <ul style={{ margin: 0, paddingLeft: 'var(--spacing-lg)' }}>
+                                    {scanWarnings.map((warning, i) => (
+                                        <li key={i} className="text-sm">{warning}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        {scannedFields.size > 0 && (
+                            <div className="text-sm text-muted mt-md">
+                                💡 Fields highlighted in blue were auto-filled from the scan. You can edit them if needed.
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Invoice Details Form */}
                 <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
                     <div className="card-header">
                         <h2 className="card-title">Invoice Details</h2>
@@ -319,7 +617,14 @@ export default function NewRequestPage() {
 
                         <div className="form-row form-row-2">
                             <div className="form-group">
-                                <label className="form-label">Vendor Name *</label>
+                                <label className="form-label">
+                                    Vendor Name *
+                                    {scannedFields.has('vendorName') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
                                 <input
                                     type="text"
                                     name="vendorName"
@@ -327,12 +632,20 @@ export default function NewRequestPage() {
                                     value={formData.vendorName}
                                     onChange={handleInputChange}
                                     placeholder="Company Name"
+                                    style={getFieldStyle('vendorName')}
                                     required
                                 />
                             </div>
 
                             <div className="form-group">
-                                <label className="form-label">Invoice Number *</label>
+                                <label className="form-label">
+                                    Invoice Number *
+                                    {scannedFields.has('invoiceNumber') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
                                 <input
                                     type="text"
                                     name="invoiceNumber"
@@ -340,6 +653,7 @@ export default function NewRequestPage() {
                                     value={formData.invoiceNumber}
                                     onChange={handleInputChange}
                                     placeholder="INV-001"
+                                    style={getFieldStyle('invoiceNumber')}
                                     required
                                 />
                             </div>
@@ -347,19 +661,34 @@ export default function NewRequestPage() {
 
                         <div className="form-row form-row-3">
                             <div className="form-group">
-                                <label className="form-label">Invoice Date *</label>
+                                <label className="form-label">
+                                    Invoice Date *
+                                    {scannedFields.has('invoiceDate') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
                                 <input
                                     type="date"
                                     name="invoiceDate"
                                     className="form-input"
                                     value={formData.invoiceDate}
                                     onChange={handleInputChange}
+                                    style={getFieldStyle('invoiceDate')}
                                     required
                                 />
                             </div>
 
                             <div className="form-group">
-                                <label className="form-label">Amount *</label>
+                                <label className="form-label">
+                                    Amount (Incl. VAT) *
+                                    {scannedFields.has('amount') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
                                 <input
                                     type="number"
                                     name="amount"
@@ -369,7 +698,51 @@ export default function NewRequestPage() {
                                     placeholder="0.00"
                                     step="0.01"
                                     min="0"
+                                    style={getFieldStyle('amount')}
                                     required
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label className="form-label">
+                                    VAT Exclusive
+                                    {scannedFields.has('vatExclusive') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
+                                <input
+                                    type="number"
+                                    name="vatExclusive"
+                                    className="form-input"
+                                    value={formData.vatExclusive}
+                                    onChange={handleInputChange}
+                                    placeholder="0.00"
+                                    step="0.01"
+                                    min="0"
+                                    style={getFieldStyle('vatExclusive')}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">
+                                    VAT Amount
+                                    {scannedFields.has('vatAmount') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
+                                <input
+                                    type="number"
+                                    name="vatAmount"
+                                    className="form-input"
+                                    value={formData.vatAmount}
+                                    onChange={handleInputChange}
+                                    placeholder="0.00"
+                                    step="0.01"
+                                    min="0"
+                                    style={getFieldStyle('vatAmount')}
                                 />
                             </div>
 
@@ -409,69 +782,65 @@ export default function NewRequestPage() {
                         <h2 className="card-title">VAT Details</h2>
                     </div>
                     <div className="card-body">
-                        <div className="form-group">
-                            <div className="form-checkbox-group">
+                        <div className="form-row form-row-2">
+                            <div className="form-group">
+                                <label className="form-label">Internal VAT Number</label>
                                 <input
-                                    type="checkbox"
-                                    id="vatCharged"
-                                    name="vatCharged"
-                                    className="form-checkbox"
-                                    checked={formData.vatCharged}
+                                    type="text"
+                                    name="internalVatNumber"
+                                    className="form-input"
+                                    value={formData.internalVatNumber}
                                     onChange={handleInputChange}
+                                    placeholder="Your company VAT number"
                                 />
-                                <label htmlFor="vatCharged">VAT Charged on this invoice</label>
+                            </div>
+
+                            <div className="form-group">
+                                <label className="form-label">
+                                    External VAT Number
+                                    {scannedFields.has('externalVatNumber') && (
+                                        <span className="text-xs" style={{ color: 'var(--color-primary)', marginLeft: 'var(--spacing-xs)' }}>
+                                            (scanned)
+                                        </span>
+                                    )}
+                                </label>
+                                <input
+                                    type="text"
+                                    name="externalVatNumber"
+                                    className="form-input"
+                                    value={formData.externalVatNumber}
+                                    onChange={handleInputChange}
+                                    placeholder="Vendor's VAT number"
+                                    style={getFieldStyle('externalVatNumber')}
+                                />
                             </div>
                         </div>
-
-                        {formData.vatCharged && (
-                            <div className="form-row form-row-2">
-                                <div className="form-group">
-                                    <label className="form-label">Internal VAT Number</label>
-                                    <input
-                                        type="text"
-                                        name="internalVatNumber"
-                                        className="form-input"
-                                        value={formData.internalVatNumber}
-                                        onChange={handleInputChange}
-                                        placeholder="Your company VAT number"
-                                    />
-                                </div>
-
-                                <div className="form-group">
-                                    <label className="form-label">External VAT Number</label>
-                                    <input
-                                        type="text"
-                                        name="externalVatNumber"
-                                        className="form-input"
-                                        value={formData.externalVatNumber}
-                                        onChange={handleInputChange}
-                                        placeholder="Vendor's VAT number"
-                                    />
-                                </div>
-                            </div>
-                        )}
                     </div>
                 </div>
 
-                {/* Documents */}
+                {/* Supporting Documents */}
                 <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
                     <div className="card-header">
-                        <h2 className="card-title">Supporting Documents</h2>
+                        <h2 className="card-title">📎 Supporting Documents</h2>
                     </div>
                     <div className="card-body">
+                        <p className="text-muted mb-md">
+                            Add any additional documents (quotes, purchase orders, contracts, etc.)
+                        </p>
+
                         <div
-                            className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
-                            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                            onDragLeave={() => setDragOver(false)}
-                            onDrop={handleFileDrop}
-                            onClick={() => fileInputRef.current?.click()}
+                            className={`upload-zone ${supportingDragOver ? 'drag-over' : ''}`}
+                            onDragOver={(e) => { e.preventDefault(); setSupportingDragOver(true); }}
+                            onDragLeave={() => setSupportingDragOver(false)}
+                            onDrop={handleSupportingDrop}
+                            onClick={() => supportingInputRef.current?.click()}
                         >
                             <input
-                                ref={fileInputRef}
+                                ref={supportingInputRef}
                                 type="file"
                                 multiple
                                 accept=".pdf,.jpg,.jpeg,.png,.gif,.doc,.docx,.xls,.xlsx"
-                                onChange={handleFileSelect}
+                                onChange={handleSupportingSelect}
                                 style={{ display: 'none' }}
                             />
                             <div className="upload-icon">📎</div>
@@ -481,18 +850,18 @@ export default function NewRequestPage() {
                             <p className="text-xs text-muted">PDF, Images, Word, Excel files</p>
                         </div>
 
-                        {/* Pending Files */}
-                        {pendingFiles.length > 0 && (
+                        {/* Pending Supporting Files */}
+                        {supportingFiles.length > 0 && (
                             <div className="file-list">
                                 <p className="text-sm text-muted mb-md">Pending upload:</p>
-                                {pendingFiles.map((file, index) => (
+                                {supportingFiles.map((file, index) => (
                                     <div key={index} className="file-item">
                                         <span className="file-name">{file.name}</span>
                                         <span className="file-size">{formatFileSize(file.size)}</span>
                                         <button
                                             type="button"
                                             className="file-remove"
-                                            onClick={() => removeFile(index)}
+                                            onClick={() => removeSupportingFile(index)}
                                         >
                                             ×
                                         </button>
@@ -529,6 +898,26 @@ export default function NewRequestPage() {
                         <h2 className="card-title">Submit for Approval</h2>
                     </div>
                     <div className="card-body">
+                        <div className="form-group mb-md">
+                            <label className="form-label">Associated Workflow</label>
+                            <select
+                                name="workflowId"
+                                className="form-select"
+                                value={formData.workflowId}
+                                onChange={handleInputChange}
+                            >
+                                <option value="">No specific workflow (Manual Approval)</option>
+                                {activeWorkflows.map((wf) => (
+                                    <option key={wf.id} value={wf.id}>
+                                        {wf.name} ({wf.steps.length} steps)
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="form-hint">
+                                Workflows ensure the request follows a predefined approval path.
+                            </p>
+                        </div>
+
                         <div className="form-group">
                             <label className="form-label">Send to Approver *</label>
                             <select

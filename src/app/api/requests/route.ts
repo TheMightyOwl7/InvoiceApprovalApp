@@ -8,12 +8,38 @@ export async function GET(request: NextRequest) {
         const status = searchParams.get('status');
         const requesterId = searchParams.get('requesterId');
         const approverId = searchParams.get('approverId');
+        const department = searchParams.get('department');
+        const vendorName = searchParams.get('vendorName');
+        const startDate = searchParams.get('startDate');
+        const endDate = searchParams.get('endDate');
 
-        const where: Record<string, unknown> = {};
+        const where: any = {};
 
         if (status) where.status = status;
         if (requesterId) where.requesterId = requesterId;
         if (approverId) where.currentApproverId = approverId;
+
+        if (department) {
+            where.requester = {
+                department: department
+            };
+        }
+
+        if (vendorName) {
+            where.vendorName = {
+                contains: vendorName
+            };
+        }
+
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate) where.createdAt.gte = new Date(startDate);
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                where.createdAt.lte = end;
+            }
+        }
 
         const requests = await prisma.paymentRequest.findMany({
             where,
@@ -60,6 +86,7 @@ export async function POST(request: NextRequest) {
             externalVatNumber,
             requesterId,
             currentApproverId,
+            workflowId,
             status = 'draft',
         } = body;
 
@@ -118,6 +145,8 @@ export async function POST(request: NextRequest) {
                 externalVatNumber,
                 requesterId,
                 currentApproverId,
+                workflowId,
+                currentStepIndex: 0,
                 status,
             },
             include: {
