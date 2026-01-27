@@ -14,7 +14,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
             where: { id },
             include: {
                 requester: true,
-                currentApprover: true,
+                vendor: true,
+                category: true,
+                project: true,
                 documents: true,
                 approvalHistory: {
                     include: {
@@ -22,9 +24,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
                     },
                     orderBy: { actionedAt: 'desc' },
                 },
+                activeSteps: {
+                    orderBy: { createdAt: 'asc' },
+                },
                 workflow: {
                     include: {
-                        steps: { orderBy: { order: 'asc' } }
+                        rules: { orderBy: { order: 'asc' } }
                     }
                 }
             },
@@ -73,45 +78,52 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         }
 
         const {
-            vendorName,
+            vendorId,
             invoiceNumber,
             invoiceDate,
             amount,
             currency,
             description,
             vatCharged,
+            vatAmount,
             internalVatNumber,
             externalVatNumber,
-            currentApproverId,
+            categoryId,
+            projectId,
+            poNumber,
+            poAmount,
+            quoteRef,
+            quoteAmount,
             status,
         } = body;
-
-        // If submitting, approver is required
-        if (status === 'pending' && !currentApproverId) {
-            return NextResponse.json(
-                { success: false, error: 'Approver is required when submitting' },
-                { status: 400 }
-            );
-        }
 
         const paymentRequest = await prisma.paymentRequest.update({
             where: { id },
             data: {
-                ...(vendorName !== undefined && { vendorName }),
+                ...(vendorId !== undefined && { vendorId }),
                 ...(invoiceNumber !== undefined && { invoiceNumber }),
                 ...(invoiceDate !== undefined && { invoiceDate: new Date(invoiceDate) }),
                 ...(amount !== undefined && { amount: parseFloat(amount) }),
                 ...(currency !== undefined && { currency }),
                 ...(description !== undefined && { description }),
                 ...(vatCharged !== undefined && { vatCharged }),
+                ...(vatAmount !== undefined && { vatAmount: parseFloat(vatAmount) }),
                 ...(internalVatNumber !== undefined && { internalVatNumber }),
                 ...(externalVatNumber !== undefined && { externalVatNumber }),
-                ...(currentApproverId !== undefined && { currentApproverId }),
+                ...(categoryId !== undefined && { categoryId }),
+                ...(projectId !== undefined && { projectId }),
+                ...(poNumber !== undefined && { poNumber }),
+                ...(poAmount !== undefined && { poAmount: poAmount ? parseFloat(poAmount) : null }),
+                ...(quoteRef !== undefined && { quoteRef }),
+                ...(quoteAmount !== undefined && { quoteAmount: quoteAmount ? parseFloat(quoteAmount) : null }),
                 ...(status !== undefined && { status }),
+                ...(status === 'pending' && { submittedAt: new Date() }),
             },
             include: {
                 requester: true,
-                currentApprover: true,
+                vendor: true,
+                category: true,
+                project: true,
             },
         });
 

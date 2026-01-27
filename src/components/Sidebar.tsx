@@ -107,10 +107,13 @@ export default function Sidebar() {
     const navItems = [
         { href: '/', label: 'Dashboard', icon: '📊' },
         { href: '/requests', label: 'All Requests', icon: '📋' },
+        { href: '/requests?filter=pending', label: 'Pending Approval', icon: '⏳', badge: pendingCount },
         { href: '/workflows', label: 'Workflows', icon: '⛓️' },
+        { href: '/approvals', label: 'Approval Matrix', icon: '🔐' },
+        { href: '/vendors', label: 'Vendors', icon: '🏢' },
+        { href: '/delegations', label: 'Delegations', icon: '🏖️' },
         { href: '/monitoring', label: 'Monitoring', icon: '🕵️' },
         { href: '/requests/new', label: 'New Request', icon: '➕' },
-        { href: '/requests?filter=pending', label: 'Pending Approval', icon: '⏳', badge: pendingCount },
         { href: '/users', label: 'Manage Users', icon: '👥' },
     ];
 

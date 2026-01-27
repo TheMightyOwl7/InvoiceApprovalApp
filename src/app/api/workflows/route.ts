@@ -7,13 +7,14 @@ export async function GET(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const status = searchParams.get('status');
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const where: any = {};
         if (status) where.status = status;
 
         const workflows = await prisma.workflow.findMany({
             where,
             include: {
-                steps: {
+                rules: {
                     orderBy: { order: 'asc' }
                 },
                 creator: {
@@ -40,11 +41,11 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name, description, steps, creatorId } = body;
+        const { name, description, rules, creatorId, departmentScope } = body;
 
-        if (!name || !steps || !Array.isArray(steps) || steps.length === 0 || !creatorId) {
+        if (!name || !creatorId) {
             return NextResponse.json(
-                { success: false, error: 'Name, steps, and creator are required' },
+                { success: false, error: 'Name and creator are required' },
                 { status: 400 }
             );
         }
@@ -61,23 +62,49 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // Create workflow with optional rules
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const workflowData: any = {
+            name,
+            description,
+            creatorId,
+            departmentScope,
+            status: 'draft',
+        };
+
+        // If rules are provided, create them
+        if (rules && Array.isArray(rules) && rules.length > 0) {
+            workflowData.rules = {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                create: rules.map((rule: any, index: number) => ({
+                    name: rule.name,
+                    description: rule.description,
+                    order: rule.order ?? index,
+                    ruleType: rule.ruleType,
+                    actionType: rule.actionType || 'require_approval',
+                    // Threshold conditions
+                    minAmount: rule.minAmount ? parseFloat(rule.minAmount) : null,
+                    maxAmount: rule.maxAmount ? parseFloat(rule.maxAmount) : null,
+                    // Other conditions
+                    requiredRole: rule.requiredRole,
+                    requiredGroupId: rule.requiredGroupId,
+                    specificApproverId: rule.specificApproverId,
+                    approvalMode: rule.approvalMode || 'sequential',
+                    requiredApprovals: rule.requiredApprovals || 1,
+                    // SoD
+                    preventSelfApproval: rule.preventSelfApproval || false,
+                    preventCreatorApproval: rule.preventCreatorApproval || false,
+                    // SLA
+                    slaHours: rule.slaHours,
+                    escalateToGroupId: rule.escalateToGroupId,
+                }))
+            };
+        }
+
         const workflow = await prisma.workflow.create({
-            data: {
-                name,
-                description,
-                creatorId,
-                status: 'pending_approval',
-                steps: {
-                    create: steps.map((step: any, index: number) => ({
-                        order: step.order || index,
-                        name: step.name,
-                        minAmount: parseFloat(step.minAmount) || 0,
-                        roleRequirement: step.roleRequirement
-                    }))
-                }
-            },
+            data: workflowData,
             include: {
-                steps: true
+                rules: true
             }
         });
 

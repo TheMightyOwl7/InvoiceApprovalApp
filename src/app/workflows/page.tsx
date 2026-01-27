@@ -3,13 +3,20 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/storage';
+import WorkflowVisualizer, { WorkflowVisualizerCompact } from '@/components/workflows/WorkflowVisualizer';
 
-interface WorkflowStep {
+interface Rule {
     id: string;
+    name: string;
+    ruleType: string;
     order: number;
-    name?: string;
-    minAmount: number;
-    roleRequirement: string;
+    actionType: string;
+    minAmount?: number | null;
+    maxAmount?: number | null;
+    requiredRole?: string | null;
+    requiredGroupId?: string | null;
+    approvalMode?: string;
+    requiredApprovals?: number;
 }
 
 interface Workflow {
@@ -17,7 +24,7 @@ interface Workflow {
     name: string;
     description?: string;
     status: string;
-    steps: WorkflowStep[];
+    rules: Rule[];
     creator: { name: string; department: string };
     approver?: { name: string };
     createdAt: string;
@@ -26,8 +33,9 @@ interface Workflow {
 export default function WorkflowsPage() {
     const [workflows, setWorkflows] = useState<Workflow[]>([]);
     const [loading, setLoading] = useState(true);
+    const [expandedId, setExpandedId] = useState<string | null>(null);
     const currentUser = getCurrentUser();
-    const isExecutive = currentUser?.userName.includes('Exec') || false; // Simple check for demo
+    const isExecutive = currentUser?.userName.includes('Exec') || false;
 
     useEffect(() => {
         fetchWorkflows();
@@ -71,6 +79,10 @@ export default function WorkflowsPage() {
         }
     }
 
+    const toggleExpand = (id: string) => {
+        setExpandedId(expandedId === id ? null : id);
+    };
+
     return (
         <div className="monitoring-container">
             <div className="page-header">
@@ -96,75 +108,72 @@ export default function WorkflowsPage() {
                             </Link>
                         </div>
                     ) : (
-                        <div className="table-wrapper">
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Creator</th>
-                                        <th>Steps</th>
-                                        <th>Status</th>
-                                        <th>Created</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {workflows.map((wf) => (
-                                        <tr key={wf.id}>
-                                            <td style={{ fontWeight: 600 }}>{wf.name}</td>
-                                            <td className="text-sm">
-                                                {wf.creator.name}
-                                                <div className="text-xs text-muted">{wf.creator.department}</div>
-                                            </td>
-                                            <td>
-                                                <div style={{ display: 'flex', gap: '4px' }}>
-                                                    {wf.steps.map((s, idx) => (
-                                                        <span
-                                                            key={s.id}
-                                                            className="status-badge"
-                                                            style={{ fontSize: '0.65rem' }}
-                                                            title={`Min R${s.minAmount}`}
-                                                        >
-                                                            {s.roleRequirement}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <span className={`status-badge status-${wf.status}`}>
-                                                    {wf.status === 'pending_approval' ? 'Pending Approval' : wf.status}
+                        <div className="workflow-list">
+                            {workflows.map((wf) => (
+                                <div key={wf.id} className="workflow-card">
+                                    <div className="workflow-card-header" onClick={() => toggleExpand(wf.id)}>
+                                        <div className="workflow-card-info">
+                                            <div className="workflow-card-title">
+                                                <span className="workflow-expand-icon">
+                                                    {expandedId === wf.id ? '▼' : '▶'}
                                                 </span>
-                                            </td>
-                                            <td className="text-sm text-muted">
-                                                {new Date(wf.createdAt).toLocaleDateString()}
-                                            </td>
-                                            <td>
-                                                <div className="table-actions">
-                                                    {wf.status === 'pending_approval' && isExecutive && (
-                                                        <>
-                                                            <button
-                                                                className="btn btn-sm btn-success"
-                                                                onClick={() => handleApproveWorkflow(wf.id, 'approve')}
-                                                            >
-                                                                ✅ Approve
-                                                            </button>
-                                                            <button
-                                                                className="btn btn-sm btn-danger"
-                                                                onClick={() => handleApproveWorkflow(wf.id, 'reject')}
-                                                            >
-                                                                ❌ Reject
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                    {wf.status === 'active' && (
-                                                        <span className="text-xs text-success font-bold">ACTIVE</span>
-                                                    )}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                                {wf.name}
+                                            </div>
+                                            <div className="workflow-card-meta">
+                                                <span>by {wf.creator.name}</span>
+                                                <span>•</span>
+                                                <span>{wf.rules.length} rules</span>
+                                                <span>•</span>
+                                                <span>{new Date(wf.createdAt).toLocaleDateString()}</span>
+                                            </div>
+                                        </div>
+                                        <div className="workflow-card-actions">
+                                            <span className={`status-badge status-${wf.status}`}>
+                                                {wf.status === 'pending_approval' ? 'Pending' : wf.status}
+                                            </span>
+                                            {wf.status === 'pending_approval' && isExecutive && (
+                                                <>
+                                                    <button
+                                                        className="btn btn-sm btn-success"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleApproveWorkflow(wf.id, 'approve');
+                                                        }}
+                                                    >
+                                                        ✅
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-sm btn-danger"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleApproveWorkflow(wf.id, 'reject');
+                                                        }}
+                                                    >
+                                                        ❌
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Compact preview when collapsed */}
+                                    {expandedId !== wf.id && wf.rules.length > 0 && (
+                                        <div className="workflow-card-preview">
+                                            <WorkflowVisualizerCompact workflow={wf} />
+                                        </div>
+                                    )}
+
+                                    {/* Full visualizer when expanded */}
+                                    {expandedId === wf.id && (
+                                        <div className="workflow-card-expanded">
+                                            {wf.description && (
+                                                <p className="workflow-description">{wf.description}</p>
+                                            )}
+                                            <WorkflowVisualizer workflow={wf} showDetails={true} />
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>

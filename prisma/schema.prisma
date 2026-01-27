@@ -1,12 +1,17 @@
-// Payment Approval App - Prisma Schema
+// Payment Approval App - Enterprise Schema
+// Migrated to PostgreSQL with comprehensive rule engine
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
+
+// ============================================
+// USER & SECURITY MODELS
+// ============================================
 
 model User {
   id          String   @id @default(cuid())
@@ -14,94 +19,316 @@ model User {
   email       String   @unique
   department  String
   role        String   @default("user") // user, manager, senior_manager, executive
-  createdAt   DateTime @default(now())
-  
+
   // Relations
-  requestsCreated   PaymentRequest[] @relation("Requester")
-  requestsToApprove PaymentRequest[] @relation("CurrentApprover")
-  approvalActions   ApprovalStep[]
+  groupMemberships   UserGroupMembership[]
+  requestsCreated    PaymentRequest[]       @relation("Requester")
+  approvalActions    ApprovalAction[]
   
   // Workflow relations
-  createdWorkflows  Workflow[] @relation("WorkflowCreator")
-  approvedWorkflows Workflow[] @relation("WorkflowApprover")
-}
-
-model PaymentRequest {
-  id            String   @id @default(cuid())
+  createdWorkflows   Workflow[]  @relation("WorkflowCreator")
+  approvedWorkflows  Workflow[]  @relation("WorkflowApprover")
   
-  // Invoice details
-  vendorName    String
-  invoiceNumber String
-  invoiceDate   DateTime
-  amount        Float
-  currency      String   @default("ZAR")
-  description   String?
+  // Category/Project ownership
+  managedCategories  SpendCategory[] @relation("CategoryApprover")
+  managedProjects    Project[]       @relation("ProjectManager")
   
-  // VAT details
-  vatCharged        Boolean @default(false)
-  internalVatNumber String?
-  externalVatNumber String?
-  
-  // Workflow
-  status        String   @default("draft") // draft, pending, approved, rejected
-  
-  requesterId       String
-  requester         User   @relation("Requester", fields: [requesterId], references: [id])
-  
-  currentApproverId String?
-  currentApprover   User?  @relation("CurrentApprover", fields: [currentApproverId], references: [id])
-  
-  // Active workflow tracking
-  workflowId        String?
-  workflow          Workflow? @relation(fields: [workflowId], references: [id])
-  currentStepIndex  Int       @default(0)
-  
-  // Relations
-  documents       Document[]
-  approvalHistory ApprovalStep[]
+  // Delegation relations
+  delegationsFrom    DelegationRule[] @relation("Delegator")
+  delegationsTo      DelegationRule[] @relation("Delegate")
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
-model Workflow {
+model UserGroup {
   id          String   @id @default(cuid())
-  name        String
+  name        String   @unique
   description String?
-  status      String   @default("pending_approval") // pending_approval, active, inactive
   
-  steps       WorkflowStep[]
-  requests    PaymentRequest[]
+  // Approval limits for this group
+  selfApprovalLimit       Float?  // Max amount user can self-approve
+  individualApprovalLimit Float?  // Max single payment approval
+  cumulativeMonthlyLimit  Float?  // Monthly cumulative limit
   
-  creatorId   String
-  creator     User     @relation("WorkflowCreator", fields: [creatorId], references: [id])
+  memberships  UserGroupMembership[]
+  rules        ApprovalRule[]
   
-  approverId  String?
-  approver    User?    @relation("WorkflowApprover", fields: [approverId], references: [id])
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-model WorkflowStep {
-  id          String   @id @default(cuid())
-  order       Int
-  name        String?
+model UserGroupMembership {
+  id        String @id @default(cuid())
+  userId    String
+  groupId   String
   
-  // Requirements
-  minAmount   Float    @default(0)
-  roleRequirement String // manager, senior_manager, executive
+  // Temporal delegation (when membership is via delegation)
+  delegatedFromId String?
+  delegationStart DateTime?
+  delegationEnd   DateTime?
   
-  workflowId  String
-  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  
+  @@unique([userId, groupId])
+}
+
+// ============================================
+// VENDOR & ENTITY MODELS
+// ============================================
+
+model Vendor {
+  id              String   @id @default(cuid())
+  name            String
+  taxNumber       String?
+  
+  // Risk classification
+  riskRating      String   @default("standard") // low, standard, high, new
+  isNew           Boolean  @default(true)
+  onboardedAt     DateTime?
+  
+  // Location & compliance
+  country         String?
+  requiresCompliance Boolean @default(false)
+  
+  // Banking
+  bankDetailsVerified  Boolean   @default(false)
+  bankDetailsChangedAt DateTime?
+  
+  requests   PaymentRequest[]
+  contracts  VendorContract[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model VendorContract {
+  id           String  @id @default(cuid())
+  vendorId     String
+  contractRef  String
+  
+  // For auto-approval matching
+  expectedAmount  Float?
+  varianceAllowed Float  @default(0.05) // 5% default
+  
+  // Recurrence
+  isRecurring Boolean @default(false)
+  frequency   String? // monthly, quarterly, annually
+  
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+}
+
+// ============================================
+// CATEGORY & PROJECT MODELS  
+// ============================================
+
+model SpendCategory {
+  id   String @id @default(cuid())
+  name String @unique
+  code String @unique
+  
+  // Default approver routing
+  defaultApproverId String?
+  defaultApprover   User?   @relation("CategoryApprover", fields: [defaultApproverId], references: [id])
+  
+  requests PaymentRequest[]
+  rules    ApprovalRule[]
+  
+  createdAt DateTime @default(now())
+}
+
+model Project {
+  id   String @id @default(cuid())
+  name String
+  code String @unique
+  
+  // Budget tracking
+  totalBudget Float
+  spentAmount Float @default(0)
+  
+  // Project manager approval
+  projectManagerId String?
+  projectManager   User?   @relation("ProjectManager", fields: [projectManagerId], references: [id])
+  
+  requests PaymentRequest[]
+  rules    ApprovalRule[]
+  
+  status String @default("active") // active, completed, on_hold
+  
+  createdAt DateTime  @default(now())
+  endsAt    DateTime?
+}
+
+// ============================================
+// WORKFLOW & RULE ENGINE
+// ============================================
+
+model Workflow {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  status      String  @default("draft") // draft, pending_approval, active, inactive
+  
+  // Scope - which requests this workflow applies to
+  departmentScope String? // null = all departments
+  
+  rules    ApprovalRule[]
+  requests PaymentRequest[]
+  
+  creatorId String
+  creator   User   @relation("WorkflowCreator", fields: [creatorId], references: [id])
+  
+  approverId String?
+  approver   User?  @relation("WorkflowApprover", fields: [approverId], references: [id])
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ApprovalRule {
+  id         String   @id @default(cuid())
+  workflowId String
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  
+  name        String
+  description String?
+  order       Int     @default(0)
+  isActive    Boolean @default(true)
+  
+  // Rule Type - determines which condition fields are relevant
+  // Types: threshold, cumulative, variance, vendor, category, 
+  //        project, compliance, sod, dual_control, sla, auto_approve
+  ruleType String
+  
+  // ============================================
+  // CONDITION FIELDS
+  // ============================================
+  
+  // Threshold conditions
+  minAmount Float?
+  maxAmount Float?
+  
+  // Cumulative conditions  
+  cumulativePeriod String? // daily, weekly, monthly
+  cumulativeLimit  Float?
+  
+  // Variance conditions
+  variancePercentage Float?  // e.g., 0.05 for 5%
+  varianceBaseField  String? // po_amount, quote_amount
+  
+  // Entity conditions (JSON arrays for flexibility)
+  vendorRiskRatings String? // JSON array: ["high", "new"]
+  vendorIsNew       Boolean?
+  
+  categoryId String?
+  category   SpendCategory? @relation(fields: [categoryId], references: [id])
+  
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  
+  // Compliance conditions
+  requiresCompliance  Boolean @default(false)
+  requiresLegalReview Boolean @default(false)
+  
+  // SoD conditions
+  preventSelfApproval    Boolean @default(false)
+  preventCreatorApproval Boolean @default(false)
+  
+  // SLA/Escalation
+  slaHours          Int?
+  escalateToGroupId String?
+  
+  // ============================================
+  // ACTION/OUTCOME FIELDS
+  // ============================================
+  
+  // Action type: require_approval, auto_approve, auto_reject, escalate
+  actionType String
+  
+  // Who must approve (one of these should be set)
+  requiredGroupId    String?
+  requiredGroup      UserGroup? @relation(fields: [requiredGroupId], references: [id])
+  requiredRole       String?    // manager, senior_manager, executive
+  specificApproverId String?
+  
+  // Structural rules
+  approvalMode      String @default("sequential") // sequential, parallel
+  requiredApprovals Int    @default(1)            // For parallel: how many must approve
+  votingMode        String? // unanimous, majority
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// ENHANCED PAYMENT REQUEST
+// ============================================
+
+model PaymentRequest {
+  id String @id @default(cuid())
+  
+  // Core invoice details
+  invoiceNumber String
+  invoiceDate   DateTime
+  amount        Float
+  currency      String  @default("ZAR")
+  description   String?
+  
+  // VAT details
+  vatCharged        Boolean @default(false)
+  vatAmount         Float?
+  internalVatNumber String?
+  externalVatNumber String?
+  
+  // Related entities
+  vendorId   String?
+  vendor     Vendor? @relation(fields: [vendorId], references: [id])
+  
+  categoryId String?
+  category   SpendCategory? @relation(fields: [categoryId], references: [id])
+  
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  
+  // PO/Quote reference for variance rules
+  poNumber    String?
+  poAmount    Float?
+  quoteRef    String?
+  quoteAmount Float?
+  
+  // Workflow tracking
+  status     String    @default("draft") // draft, pending, approved, rejected, escalated
+  workflowId String?
+  workflow   Workflow? @relation(fields: [workflowId], references: [id])
+  
+  // Requester
+  requesterId String
+  requester   User   @relation("Requester", fields: [requesterId], references: [id])
+  
+  // Documents & history
+  documents       Document[]
+  approvalHistory ApprovalAction[]
+  activeSteps     ActiveApprovalStep[]
+  
+  // Timestamps
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  submittedAt DateTime?
+  completedAt DateTime?
 }
 
 model Document {
-  id        String   @id @default(cuid())
-  name      String
-  mimeType  String
-  size      Int
-  path      String   // File system path in /uploads
+  id       String @id @default(cuid())
+  name     String
+  mimeType String
+  size     Int
+  path     String // File system path in /uploads
   
   requestId String
   request   PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -109,17 +336,79 @@ model Document {
   uploadedAt DateTime @default(now())
 }
 
-model ApprovalStep {
-  id         String   @id @default(cuid())
+// ============================================
+// APPROVAL TRACKING
+// ============================================
+
+model ActiveApprovalStep {
+  id        String         @id @default(cuid())
+  requestId String
+  request   PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   
-  status     String   // pending, approved, rejected
-  comments   String?
+  ruleId String // Which rule generated this step
+  
+  // Who needs to approve
+  requiredGroupId    String?
+  requiredRole       String?
+  specificApproverId String?
+  
+  // Parallel approval tracking
+  requiredCount      Int    @default(1)
+  receivedApprovals  Int    @default(0)
+  receivedRejections Int    @default(0)
+  votingMode         String? // unanimous, majority
+  
+  status String @default("pending") // pending, approved, rejected, escalated, skipped
+  
+  // SLA tracking
+  dueAt       DateTime?
+  escalatedAt DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ApprovalAction {
+  id String @id @default(cuid())
+  
+  requestId String
+  request   PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  
+  stepId String? // Links to ActiveApprovalStep
+  
+  action   String  // approved, rejected, escalated, delegated
+  comments String?
   
   approverId String
   approver   User   @relation(fields: [approverId], references: [id])
   
-  requestId  String
-  request    PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  // For audit: capture rule that was satisfied
+  satisfiedRuleId String?
   
   actionedAt DateTime @default(now())
+}
+
+// ============================================
+// TEMPORAL/DELEGATION
+// ============================================
+
+model DelegationRule {
+  id String @id @default(cuid())
+  
+  delegatorId String
+  delegator   User   @relation("Delegator", fields: [delegatorId], references: [id])
+  
+  delegateId String
+  delegate   User   @relation("Delegate", fields: [delegateId], references: [id])
+  
+  startDate DateTime
+  endDate   DateTime
+  
+  // Optional limits on delegation
+  maxAmount Float?
+  
+  isActive Boolean @default(true)
+  reason   String? // "Annual Leave", "Medical", etc.
+  
+  createdAt DateTime @default(now())
 }

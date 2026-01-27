@@ -1,14 +1,17 @@
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
-import { join } from 'path';
+import pg from 'pg';
 
-// The database file is in the root dev.db (created by Prisma CLI)
-const dbPath = join(process.cwd(), 'dev.db');
+// Create PostgreSQL connection pool
+const connectionString = process.env.DATABASE_URL;
 
-// Create Prisma adapter for SQLite
-const adapter = new PrismaBetterSqlite3({
-    url: `file:${dbPath}`,
+// For development, use a pool. For production, you might configure differently.
+const pool = new pg.Pool({
+    connectionString,
 });
+
+// Create Prisma adapter for PostgreSQL
+const adapter = new PrismaPg(pool);
 
 const globalForPrisma = globalThis as unknown as {
     prisma: PrismaClient | undefined;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { ruleEngine } from '@/lib/rules/engine';
 
 // GET /api/requests - List all requests with filters
 export async function GET(request: NextRequest) {
@@ -7,17 +8,16 @@ export async function GET(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const status = searchParams.get('status');
         const requesterId = searchParams.get('requesterId');
-        const approverId = searchParams.get('approverId');
         const department = searchParams.get('department');
         const vendorName = searchParams.get('vendorName');
         const startDate = searchParams.get('startDate');
         const endDate = searchParams.get('endDate');
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const where: any = {};
 
         if (status) where.status = status;
         if (requesterId) where.requesterId = requesterId;
-        if (approverId) where.currentApproverId = approverId;
 
         if (department) {
             where.requester = {
@@ -25,9 +25,13 @@ export async function GET(request: NextRequest) {
             };
         }
 
+        // Filter by vendor name through relation
         if (vendorName) {
-            where.vendorName = {
-                contains: vendorName
+            where.vendor = {
+                name: {
+                    contains: vendorName,
+                    mode: 'insensitive'
+                }
             };
         }
 
@@ -47,11 +51,21 @@ export async function GET(request: NextRequest) {
                 requester: {
                     select: { id: true, name: true, department: true },
                 },
-                currentApprover: {
-                    select: { id: true, name: true, department: true },
+                vendor: {
+                    select: { id: true, name: true, riskRating: true },
+                },
+                category: {
+                    select: { id: true, name: true, code: true },
+                },
+                project: {
+                    select: { id: true, name: true, code: true },
                 },
                 documents: {
                     select: { id: true, name: true, mimeType: true, size: true },
+                },
+                activeSteps: {
+                    where: { status: 'pending' },
+                    select: { id: true, requiredRole: true, status: true },
                 },
                 _count: {
                     select: { approvalHistory: true },
@@ -75,25 +89,32 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         const {
-            vendorName,
+            vendorId,       // Now using vendor relation
+            vendorName,     // For creating new vendor if needed
             invoiceNumber,
             invoiceDate,
             amount,
             currency,
             description,
             vatCharged,
+            vatAmount,
             internalVatNumber,
             externalVatNumber,
             requesterId,
-            currentApproverId,
+            categoryId,
+            projectId,
+            poNumber,
+            poAmount,
+            quoteRef,
+            quoteAmount,
             workflowId,
             status = 'draft',
         } = body;
 
         // Basic validation
-        if (!vendorName || !invoiceNumber || !invoiceDate || !amount || !requesterId) {
+        if (!invoiceNumber || !invoiceDate || !amount || !requesterId) {
             return NextResponse.json(
-                { success: false, error: 'Vendor name, invoice number, date, amount, and requester are required' },
+                { success: false, error: 'Invoice number, date, amount, and requester are required' },
                 { status: 400 }
             );
         }
@@ -110,50 +131,150 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // If submitting (not draft), approver is required
-        if (status === 'pending' && !currentApproverId) {
-            return NextResponse.json(
-                { success: false, error: 'Approver is required when submitting a request' },
-                { status: 400 }
-            );
-        }
-
-        // If approver specified, verify they exist
-        if (currentApproverId) {
-            const approver = await prisma.user.findUnique({
-                where: { id: currentApproverId },
+        // Handle vendor - either use existing or create new
+        let finalVendorId = vendorId;
+        if (!vendorId && vendorName) {
+            // Check if vendor with this name exists
+            let vendor = await prisma.vendor.findFirst({
+                where: { name: vendorName }
             });
 
-            if (!approver) {
-                return NextResponse.json(
-                    { success: false, error: 'Approver not found' },
-                    { status: 404 }
-                );
+            if (!vendor) {
+                // Create new vendor
+                vendor = await prisma.vendor.create({
+                    data: {
+                        name: vendorName,
+                        isNew: true,
+                        riskRating: 'new',
+                    }
+                });
             }
+            finalVendorId = vendor.id;
         }
 
+        // Create the payment request
         const paymentRequest = await prisma.paymentRequest.create({
             data: {
-                vendorName,
                 invoiceNumber,
                 invoiceDate: new Date(invoiceDate),
                 amount: parseFloat(amount),
                 currency: currency || 'ZAR',
                 description,
                 vatCharged: vatCharged || false,
+                vatAmount: vatAmount ? parseFloat(vatAmount) : null,
                 internalVatNumber,
                 externalVatNumber,
                 requesterId,
-                currentApproverId,
+                vendorId: finalVendorId,
+                categoryId,
+                projectId,
+                poNumber,
+                poAmount: poAmount ? parseFloat(poAmount) : null,
+                quoteRef,
+                quoteAmount: quoteAmount ? parseFloat(quoteAmount) : null,
                 workflowId,
-                currentStepIndex: 0,
                 status,
             },
             include: {
                 requester: true,
-                currentApprover: true,
+                vendor: true,
+                category: true,
+                project: true,
             },
         });
+
+        // If status is 'pending', run rule engine to assign workflow and create approval steps
+        if (status === 'pending') {
+            try {
+                // Find applicable workflow based on department/category
+                const workflow = await ruleEngine.findApplicableWorkflow(paymentRequest, requester);
+
+                if (workflow) {
+                    // Build evaluation context
+                    const context = await ruleEngine.buildContext(paymentRequest, requester);
+
+                    // Evaluate all rules in the workflow
+                    const result = await ruleEngine.evaluateWorkflow(workflow, context);
+
+                    // Handle auto-approve/auto-reject
+                    if (result.autoReject) {
+                        await prisma.paymentRequest.update({
+                            where: { id: paymentRequest.id },
+                            data: {
+                                status: 'rejected',
+                                workflowId: workflow.id,
+                                completedAt: new Date(),
+                            },
+                        });
+
+                        return NextResponse.json({
+                            success: true,
+                            data: { ...paymentRequest, status: 'rejected' },
+                            message: result.autoRejectReason || 'Request automatically rejected by rules',
+                        }, { status: 201 });
+                    }
+
+                    if (result.autoApprove) {
+                        await prisma.paymentRequest.update({
+                            where: { id: paymentRequest.id },
+                            data: {
+                                status: 'approved',
+                                workflowId: workflow.id,
+                                completedAt: new Date(),
+                            },
+                        });
+
+                        return NextResponse.json({
+                            success: true,
+                            data: { ...paymentRequest, status: 'approved' },
+                            message: 'Request automatically approved',
+                        }, { status: 201 });
+                    }
+
+                    // Create approval steps and update request with workflow
+                    if (result.requiredSteps.length > 0) {
+                        await ruleEngine.createApprovalSteps(paymentRequest.id, result.requiredSteps);
+                    }
+
+                    // Update request with assigned workflow
+                    await prisma.paymentRequest.update({
+                        where: { id: paymentRequest.id },
+                        data: {
+                            workflowId: workflow.id,
+                            submittedAt: new Date(),
+                        },
+                    });
+
+                    // Refetch with updated data
+                    const updatedRequest = await prisma.paymentRequest.findUnique({
+                        where: { id: paymentRequest.id },
+                        include: {
+                            requester: true,
+                            vendor: true,
+                            category: true,
+                            project: true,
+                            workflow: true,
+                            activeSteps: {
+                                where: { status: 'pending' },
+                            },
+                        },
+                    });
+
+                    return NextResponse.json({
+                        success: true,
+                        data: updatedRequest,
+                        workflow: {
+                            id: workflow.id,
+                            name: workflow.name,
+                            stepsCreated: result.requiredSteps.length,
+                        },
+                    }, { status: 201 });
+                }
+            } catch (ruleError) {
+                console.error('Rule engine error (non-blocking):', ruleError);
+                // Continue even if rule engine fails - request is already created
+            }
+        }
 
         return NextResponse.json({ success: true, data: paymentRequest }, { status: 201 });
     } catch (error) {

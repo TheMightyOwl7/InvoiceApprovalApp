@@ -88,12 +88,21 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     try {
         const { id } = await params;
 
-        // Check for pending requests where user is requester or approver
+        // Check for pending requests where user is requester or has pending approval steps
         const pendingRequests = await prisma.paymentRequest.findFirst({
             where: {
                 OR: [
                     { requesterId: id, status: 'pending' },
-                    { currentApproverId: id, status: 'pending' },
+                    {
+                        activeSteps: {
+                            some: {
+                                status: 'pending',
+                                OR: [
+                                    { specificApproverId: id },
+                                ]
+                            }
+                        }
+                    },
                 ],
             },
         });

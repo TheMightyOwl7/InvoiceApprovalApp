@@ -1,21 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { canUserApprove } from '@/lib/rules/evaluators/sod';
 
 interface RouteParams {
     params: Promise<{ id: string }>;
 }
 
-// POST /api/requests/[id]/approve - Approve, reject, or forward request
+// POST /api/requests/[id]/approve - Approve, reject, or escalate request
 export async function POST(request: NextRequest, { params }: RouteParams) {
     try {
         const { id } = await params;
         const body = await request.json();
-        const { action, approverId, nextApproverId, comments } = body;
+        const { action, approverId, comments, stepId } = body;
 
         // Validate action
-        if (!['approve', 'reject', 'forward'].includes(action)) {
+        if (!['approve', 'reject', 'escalate'].includes(action)) {
             return NextResponse.json(
-                { success: false, error: 'Invalid action. Must be approve, reject, or forward' },
+                { success: false, error: 'Invalid action. Must be approve, reject, or escalate' },
                 { status: 400 }
             );
         }
@@ -30,7 +31,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
         const paymentRequest = await prisma.paymentRequest.findUnique({
             where: { id },
-            include: { currentApprover: true },
+            include: {
+                activeSteps: {
+                    where: { status: 'pending' },
+                    orderBy: { createdAt: 'asc' },
+                },
+                workflow: {
+                    include: { rules: { where: { isActive: true } } }
+                }
+            },
         });
 
         if (!paymentRequest) {
@@ -48,122 +57,154 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
             );
         }
 
-        // Must be the current approver
-        if (paymentRequest.currentApproverId !== approverId) {
+        // Get the approver
+        const approver = await prisma.user.findUnique({
+            where: { id: approverId },
+            include: {
+                groupMemberships: {
+                    include: { group: true }
+                }
+            }
+        });
+
+        if (!approver) {
             return NextResponse.json(
-                { success: false, error: 'You are not the current approver for this request' },
+                { success: false, error: 'Approver not found' },
+                { status: 404 }
+            );
+        }
+
+        // Check Segregation of Duties - creator cannot approve own request
+        const sodCheck = canUserApprove(approverId, paymentRequest.requesterId, true);
+        if (!sodCheck.allowed) {
+            return NextResponse.json(
+                { success: false, error: sodCheck.reason },
                 { status: 403 }
             );
         }
 
-        // For forwarding, next approver is required
-        if (action === 'forward' && !nextApproverId) {
+        // Find the current pending step
+        const currentStep = stepId
+            ? paymentRequest.activeSteps.find(s => s.id === stepId)
+            : paymentRequest.activeSteps[0];
+
+        if (!currentStep) {
             return NextResponse.json(
-                { success: false, error: 'Next approver is required for forwarding' },
+                { success: false, error: 'No pending approval step found' },
                 { status: 400 }
             );
         }
 
-        // Verify next approver exists if forwarding
-        if (nextApproverId) {
-            const nextApprover = await prisma.user.findUnique({
-                where: { id: nextApproverId },
-            });
+        // Validate approver can action this step
+        let canApproveStep = false;
 
-            if (!nextApprover) {
-                return NextResponse.json(
-                    { success: false, error: 'Next approver not found' },
-                    { status: 404 }
-                );
-            }
+        // Check if specific approver is required
+        if (currentStep.specificApproverId) {
+            canApproveStep = currentStep.specificApproverId === approverId;
+        }
+        // Check if role requirement matches
+        else if (currentStep.requiredRole) {
+            canApproveStep = approver.role === currentStep.requiredRole ||
+                approver.role === 'executive'; // Executives can always approve
+        }
+        // Check if group requirement matches
+        else if (currentStep.requiredGroupId) {
+            canApproveStep = approver.groupMemberships.some(
+                m => m.groupId === currentStep.requiredGroupId
+            );
+        }
+        // No specific requirement - anyone with manager+ role can approve
+        else {
+            canApproveStep = ['manager', 'senior_manager', 'executive'].includes(approver.role);
         }
 
-        // Create approval step record
-        await prisma.approvalStep.create({
+        if (!canApproveStep) {
+            return NextResponse.json(
+                { success: false, error: 'You are not authorized to approve this step' },
+                { status: 403 }
+            );
+        }
+
+        // Create approval action record
+        await prisma.approvalAction.create({
             data: {
                 requestId: id,
+                stepId: currentStep.id,
                 approverId,
-                status: action === 'reject' ? 'rejected' : 'approved',
+                action: action === 'reject' ? 'rejected' : action === 'escalate' ? 'escalated' : 'approved',
                 comments,
+                satisfiedRuleId: currentStep.ruleId,
             },
         });
 
-        // Update request status and approver
+        // Handle the action
         let newStatus = paymentRequest.status;
-        let newApproverId: string | null = paymentRequest.currentApproverId;
-        let newStepIndex = paymentRequest.currentStepIndex;
+        let stepUpdate: { status: string; receivedApprovals?: number; receivedRejections?: number } = { status: 'pending' };
 
         if (action === 'reject') {
             newStatus = 'rejected';
-            newApproverId = null;
-        } else if (action === 'forward') {
-            // Manual forward - stay pending
-            newStatus = 'pending';
-            newApproverId = nextApproverId;
+            stepUpdate = { status: 'rejected', receivedRejections: currentStep.receivedRejections + 1 };
+        } else if (action === 'escalate') {
+            stepUpdate = { status: 'escalated' };
+            // Escalation logic would create a new step for the escalation group
         } else if (action === 'approve') {
-            if (paymentRequest.workflowId) {
-                // Get workflow details
-                const workflow = await prisma.workflow.findUnique({
-                    where: { id: paymentRequest.workflowId },
-                    include: { steps: { orderBy: { order: 'asc' } } }
-                });
+            const newApprovalCount = currentStep.receivedApprovals + 1;
 
-                if (workflow && workflow.steps.length > 0) {
-                    // Find only steps that meet the amount requirement
-                    const activeSteps = workflow.steps.filter(s => paymentRequest.amount >= s.minAmount);
+            // Check if we've met the required approval count
+            if (newApprovalCount >= currentStep.requiredCount) {
+                stepUpdate = { status: 'approved', receivedApprovals: newApprovalCount };
 
-                    // The current step's position in the active steps
-                    const currentActiveIdx = activeSteps.findIndex(s => s.order === paymentRequest.currentStepIndex);
-                    const isFinalStep = currentActiveIdx === -1 || currentActiveIdx >= activeSteps.length - 1;
+                // Check if there are more pending steps
+                const remainingSteps = paymentRequest.activeSteps.filter(
+                    s => s.id !== currentStep.id && s.status === 'pending'
+                );
 
-                    if (isFinalStep) {
-                        // Final step - grant approval
-                        newStatus = 'approved';
-                        newApproverId = null;
-                    } else {
-                        // Intermediate step - find the NEXT active step
-                        const nextStep = activeSteps[currentActiveIdx + 1];
-
-                        if (!nextApproverId) {
-                            return NextResponse.json(
-                                { success: false, error: `Workflow requires forwarding to the next level: ${nextStep.roleRequirement}` },
-                                { status: 400 }
-                            );
-                        }
-                        newStatus = 'pending';
-                        newApproverId = nextApproverId;
-                        newStepIndex = nextStep.order;
-                    }
-                } else {
-                    // Fallback for missing workflow or steps
+                if (remainingSteps.length === 0) {
+                    // No more steps - request is fully approved
                     newStatus = 'approved';
-                    newApproverId = null;
                 }
+                // Else: more steps remain, status stays pending
             } else {
-                // No workflow - simple approval
-                newStatus = 'approved';
-                newApproverId = null;
+                // Need more approvals for this step (parallel approval)
+                stepUpdate = { status: 'pending', receivedApprovals: newApprovalCount };
             }
+        }
+
+        // Update the step
+        await prisma.activeApprovalStep.update({
+            where: { id: currentStep.id },
+            data: stepUpdate,
+        });
+
+        // Update request status
+        const updateData: { status: string; completedAt?: Date } = { status: newStatus };
+        if (newStatus === 'approved' || newStatus === 'rejected') {
+            updateData.completedAt = new Date();
         }
 
         const updated = await prisma.paymentRequest.update({
             where: { id },
-            data: {
-                status: newStatus,
-                currentApproverId: newApproverId,
-                currentStepIndex: newStepIndex,
-            },
+            data: updateData,
             include: {
                 requester: true,
-                currentApprover: true,
+                vendor: true,
                 approvalHistory: {
                     include: { approver: true },
                     orderBy: { actionedAt: 'desc' },
                 },
+                activeSteps: true,
             },
         });
 
-        return NextResponse.json({ success: true, data: updated });
+        return NextResponse.json({
+            success: true,
+            data: updated,
+            message: action === 'approve'
+                ? (newStatus === 'approved' ? 'Request fully approved' : 'Approval recorded, awaiting more approvals')
+                : action === 'reject'
+                    ? 'Request rejected'
+                    : 'Request escalated'
+        });
     } catch (error) {
         console.error('Error processing approval:', error);
         return NextResponse.json(

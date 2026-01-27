@@ -48,3 +48,6 @@ next-env.d.ts
 # SQLite database
 *.db
 *.db-journal
+
+# Documents
+/docs
