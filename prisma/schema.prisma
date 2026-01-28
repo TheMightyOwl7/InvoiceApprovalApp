@@ -17,8 +17,17 @@ model User {
   id          String   @id @default(cuid())
   name        String
   email       String   @unique
-  department  String
-  role        String   @default("user") // user, manager, senior_manager, executive
+  
+  // Deprecated string fields (keep for migration)
+  department  String?
+  role        String?   @default("user") // user, manager, senior_manager, executive
+
+  // New Relations
+  departmentId String?
+  userDepartment   Department? @relation(fields: [departmentId], references: [id])
+  
+  jobRoleId    String?
+  jobRole      JobRole?    @relation(fields: [jobRoleId], references: [id])
 
   // Relations
   groupMemberships   UserGroupMembership[]
@@ -39,6 +48,34 @@ model User {
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  
+  users       User[]
+  jobRoles    JobRole[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model JobRole {
+  id          String   @id @default(cuid())
+  name        String   // e.g. "Senior Manager"
+  level       Int      @default(1) // Hierarchy level: 1=Junior, 2=Team Member, 3=Manager, 4=Snr Manager
+  
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  
+  users       User[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([departmentId, name]) // Unique role name per department
 }
 
 model UserGroup {
@@ -178,6 +215,7 @@ model Workflow {
   // Scope - which requests this workflow applies to
   departmentScope String? // null = all departments
   
+  stages   WorkflowStage[]
   rules    ApprovalRule[]
   requests PaymentRequest[]
   
@@ -191,10 +229,61 @@ model Workflow {
   updatedAt DateTime @updatedAt
 }
 
+// ============================================
+// WORKFLOW STAGE - Core approval step
+// ============================================
+
+model WorkflowStage {
+  id         String   @id @default(cuid())
+  workflowId String
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  
+  name        String   // e.g., "Manager Approval", "Compliance Review"
+  description String?
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  
+  // Stage Type: static (always runs) or conditional (inserted by rules)
+  stageType String @default("static") // static, conditional
+  
+  // Reviewer Assignment - flexible options
+  // Option 1: Specific role level requirement
+  requiredRole String? // manager, senior_manager, executive, compliance_officer
+  
+  // Option 2: Specific user group
+  requiredGroupId String?
+  
+  // Option 3: Specific user(s)
+  specificApproverIds String? // JSON array of user IDs
+  
+  // Approval Mode for this stage
+  approvalMode String @default("any") // any (1 approver), all (unanimous), majority, count
+  requiredApprovals Int @default(1)  // For 'count' mode: exact number needed (e.g., 2/3)
+  
+  // SLA settings for this stage
+  slaHours Int?
+  escalateToGroupId String?
+  
+  // Rules attached to this stage (conditions that modify behavior)
+  attachedRules ApprovalRule[] @relation("StageRules")
+  
+  // Condition for conditional stages (when stageType = "conditional")
+  // These fields determine WHEN this stage is inserted
+  conditionType String? // vendor_risk, amount_threshold, category, project, compliance
+  conditionValue String? // JSON: {"riskRatings": ["high", "new"]} or {"minAmount": 50000}
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model ApprovalRule {
   id         String   @id @default(cuid())
   workflowId String
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  
+  // Optional: Rule can be attached to a specific stage
+  stageId String?
+  stage   WorkflowStage? @relation("StageRules", fields: [stageId], references: [id])
   
   name        String
   description String?

@@ -156,8 +156,8 @@ export default function RequestDetailPage({ params }: PageProps) {
     const isCurrentApprover = request?.currentApproverId === currentUser?.userId;
     const canApprove = request?.status === 'pending' && isCurrentApprover;
 
-    const currentWorkflowStep = request?.workflow?.steps.find(s => s.order === request.currentStepIndex);
-    const isFinalWorkflowStep = request?.workflow ? request.currentStepIndex >= request.workflow.steps.length - 1 : true;
+    const currentWorkflowStep = request?.workflow?.steps?.find(s => s.order === request.currentStepIndex);
+    const isFinalWorkflowStep = request?.workflow?.steps ? request.currentStepIndex >= request.workflow.steps.length - 1 : true;
 
     function openApprovalModal(action: 'approve' | 'reject' | 'forward') {
         setApprovalAction(action);
@@ -409,7 +409,7 @@ export default function RequestDetailPage({ params }: PageProps) {
                             {request.workflow ? (
                                 <div className="workflow-steps" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
                                     <div className="font-bold text-sm mb-xs">{request.workflow.name}</div>
-                                    {request.workflow.steps.map((step, idx) => (
+                                    {request.workflow.steps?.map((step, idx) => (
                                         <div key={idx} style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -436,6 +436,9 @@ export default function RequestDetailPage({ params }: PageProps) {
                                             </div>
                                         </div>
                                     ))}
+                                    {(!request.workflow.steps || request.workflow.steps.length === 0) && (
+                                        <p className="text-muted text-sm italic">No workflow steps defined</p>
+                                    )}
                                 </div>
                             ) : (
                                 <p className="text-muted text-sm italic">Manual approval (no workflow)</p>

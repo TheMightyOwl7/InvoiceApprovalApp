@@ -59,76 +59,205 @@ async function main() {
     console.log(`✅ Created 4 user groups`);
 
     // ============================================
-    // 2. USERS
+    // 2. DEPARTMENTS & JOB ROLES
+    // ============================================
+    console.log('Creating departments and roles...');
+
+    const departmentsList = [
+        'Finance',
+        'Operations',
+        'IT',
+        'HR',
+        'Admin',
+        'Treasury',
+        'Marketing'
+    ];
+
+    const roleLevels = [
+        { name: 'Junior Team Member', level: 1 },
+        { name: 'Team Member', level: 2 },
+        { name: 'Manager', level: 3 },
+        { name: 'Senior Manager', level: 4 },
+        { name: 'Executive', level: 5 } // Added Executive for completeness
+    ];
+
+    const departmentMap = new Map();
+    const roleMap = new Map(); // Key: "DeptName-RoleName"
+
+    for (const deptName of departmentsList) {
+        const dept = await prisma.department.upsert({
+            where: { name: deptName },
+            update: {},
+            create: { name: deptName }
+        });
+        departmentMap.set(deptName, dept);
+
+        for (const roleDef of roleLevels) {
+            const role = await prisma.jobRole.upsert({
+                where: {
+                    departmentId_name: {
+                        departmentId: dept.id,
+                        name: roleDef.name
+                    }
+                },
+                update: { level: roleDef.level },
+                create: {
+                    name: roleDef.name,
+                    level: roleDef.level,
+                    departmentId: dept.id
+                }
+            });
+            roleMap.set(`${deptName}-${roleDef.name}`, role);
+        }
+    }
+
+    console.log(`✅ Created ${departmentsList.length} departments and roles`);
+
+    // ============================================
+    // 3. USERS
     // ============================================
     console.log('Creating users...');
+
+    // Helper to get IDs
+    const getDeptId = (name: string) => departmentMap.get(name)?.id;
+    const getRoleId = (dept: string, role: string) => roleMap.get(`${dept}-${role}`)?.id;
 
     const users = await Promise.all([
         // Finance Department
         prisma.user.upsert({
             where: { email: 'sarah.exec@company.com' },
-            update: {},
-            create: { name: 'Sarah Molefe', email: 'sarah.exec@company.com', department: 'Finance', role: 'executive' },
+            update: { departmentId: getDeptId('Finance'), jobRoleId: getRoleId('Finance', 'Executive') },
+            create: {
+                name: 'Sarah Molefe',
+                email: 'sarah.exec@company.com',
+                department: 'Finance',
+                role: 'executive',
+                departmentId: getDeptId('Finance'),
+                jobRoleId: getRoleId('Finance', 'Executive')
+            },
         }),
         prisma.user.upsert({
             where: { email: 'david.cfo@company.com' },
-            update: {},
-            create: { name: 'David Nkosi', email: 'david.cfo@company.com', department: 'Finance', role: 'senior_manager' },
+            update: { departmentId: getDeptId('Finance'), jobRoleId: getRoleId('Finance', 'Senior Manager') },
+            create: {
+                name: 'David Nkosi',
+                email: 'david.cfo@company.com',
+                department: 'Finance',
+                role: 'senior_manager',
+                departmentId: getDeptId('Finance'),
+                jobRoleId: getRoleId('Finance', 'Senior Manager')
+            },
         }),
         prisma.user.upsert({
             where: { email: 'thandi.manager@company.com' },
-            update: {},
-            create: { name: 'Thandi Dlamini', email: 'thandi.manager@company.com', department: 'Finance', role: 'manager' },
+            update: { departmentId: getDeptId('Finance'), jobRoleId: getRoleId('Finance', 'Manager') },
+            create: {
+                name: 'Thandi Dlamini',
+                email: 'thandi.manager@company.com',
+                department: 'Finance',
+                role: 'manager',
+                departmentId: getDeptId('Finance'),
+                jobRoleId: getRoleId('Finance', 'Manager')
+            },
         }),
         prisma.user.upsert({
             where: { email: 'james.analyst@company.com' },
-            update: {},
-            create: { name: 'James van der Berg', email: 'james.analyst@company.com', department: 'Finance', role: 'user' },
+            update: { departmentId: getDeptId('Finance'), jobRoleId: getRoleId('Finance', 'Team Member') },
+            create: {
+                name: 'James van der Berg',
+                email: 'james.analyst@company.com',
+                department: 'Finance',
+                role: 'user',
+                departmentId: getDeptId('Finance'),
+                jobRoleId: getRoleId('Finance', 'Team Member')
+            },
         }),
 
         // Operations Department
         prisma.user.upsert({
             where: { email: 'mike.ops@company.com' },
-            update: {},
-            create: { name: 'Mike Pretorius', email: 'mike.ops@company.com', department: 'Operations', role: 'executive' },
+            update: { departmentId: getDeptId('Operations'), jobRoleId: getRoleId('Operations', 'Executive') },
+            create: {
+                name: 'Mike Pretorius',
+                email: 'mike.ops@company.com',
+                department: 'Operations',
+                role: 'executive',
+                departmentId: getDeptId('Operations'),
+                jobRoleId: getRoleId('Operations', 'Executive')
+            },
         }),
         prisma.user.upsert({
             where: { email: 'nomsa.ops@company.com' },
-            update: {},
-            create: { name: 'Nomsa Khumalo', email: 'nomsa.ops@company.com', department: 'Operations', role: 'manager' },
+            update: { departmentId: getDeptId('Operations'), jobRoleId: getRoleId('Operations', 'Manager') },
+            create: {
+                name: 'Nomsa Khumalo',
+                email: 'nomsa.ops@company.com',
+                department: 'Operations',
+                role: 'manager',
+                departmentId: getDeptId('Operations'),
+                jobRoleId: getRoleId('Operations', 'Manager')
+            },
         }),
 
         // IT Department
         prisma.user.upsert({
             where: { email: 'sipho.it@company.com' },
-            update: {},
-            create: { name: 'Sipho Madonsela', email: 'sipho.it@company.com', department: 'IT', role: 'senior_manager' },
+            update: { departmentId: getDeptId('IT'), jobRoleId: getRoleId('IT', 'Senior Manager') },
+            create: {
+                name: 'Sipho Madonsela',
+                email: 'sipho.it@company.com',
+                department: 'IT',
+                role: 'senior_manager',
+                departmentId: getDeptId('IT'),
+                jobRoleId: getRoleId('IT', 'Senior Manager')
+            },
         }),
         prisma.user.upsert({
             where: { email: 'lisa.it@company.com' },
-            update: {},
-            create: { name: 'Lisa Fourie', email: 'lisa.it@company.com', department: 'IT', role: 'user' },
+            update: { departmentId: getDeptId('IT'), jobRoleId: getRoleId('IT', 'Team Member') },
+            create: {
+                name: 'Lisa Fourie',
+                email: 'lisa.it@company.com',
+                department: 'IT',
+                role: 'user',
+                departmentId: getDeptId('IT'),
+                jobRoleId: getRoleId('IT', 'Team Member')
+            },
         }),
 
         // HR Department
         prisma.user.upsert({
             where: { email: 'peter.hr@company.com' },
-            update: {},
-            create: { name: 'Peter Mbeki', email: 'peter.hr@company.com', department: 'HR', role: 'manager' },
+            update: { departmentId: getDeptId('HR'), jobRoleId: getRoleId('HR', 'Manager') },
+            create: {
+                name: 'Peter Mbeki',
+                email: 'peter.hr@company.com',
+                department: 'HR',
+                role: 'manager',
+                departmentId: getDeptId('HR'),
+                jobRoleId: getRoleId('HR', 'Manager')
+            },
         }),
 
         // Admin/General
         prisma.user.upsert({
             where: { email: 'admin@company.com' },
-            update: {},
-            create: { name: 'System Admin', email: 'admin@company.com', department: 'Admin', role: 'executive' },
+            update: { departmentId: getDeptId('Admin'), jobRoleId: getRoleId('Admin', 'Executive') },
+            create: {
+                name: 'System Admin',
+                email: 'admin@company.com',
+                department: 'Admin',
+                role: 'executive',
+                departmentId: getDeptId('Admin'),
+                jobRoleId: getRoleId('Admin', 'Executive')
+            },
         }),
     ]);
 
     console.log(`✅ Created ${users.length} users`);
 
     // ============================================
-    // 3. USER GROUP MEMBERSHIPS
+    // 4. USER GROUP MEMBERSHIPS
     // ============================================
     console.log('Assigning users to groups...');
 
@@ -565,17 +694,451 @@ async function main() {
     console.log(`✅ Created 3 workflows with rules`);
 
     // ============================================
+    // 8. ADDITIONAL USERS
+    // ============================================
+    console.log('Creating additional users...');
+
+    const additionalUsers = await Promise.all([
+        // Marketing Department
+        prisma.user.upsert({
+            where: { email: 'karen.mkt@company.com' },
+            update: {},
+            create: {
+                name: 'Karen Williams',
+                email: 'karen.mkt@company.com',
+                department: 'Marketing',
+                role: 'senior_manager',
+                departmentId: getDeptId('Marketing'),
+                jobRoleId: getRoleId('Marketing', 'Senior Manager')
+            },
+        }),
+        prisma.user.upsert({
+            where: { email: 'john.mkt@company.com' },
+            update: {},
+            create: {
+                name: 'John Botha',
+                email: 'john.mkt@company.com',
+                department: 'Marketing',
+                role: 'manager',
+                departmentId: getDeptId('Marketing'),
+                jobRoleId: getRoleId('Marketing', 'Manager')
+            },
+        }),
+        prisma.user.upsert({
+            where: { email: 'priya.mkt@company.com' },
+            update: {},
+            create: {
+                name: 'Priya Naidoo',
+                email: 'priya.mkt@company.com',
+                department: 'Marketing',
+                role: 'user',
+                departmentId: getDeptId('Marketing'),
+                jobRoleId: getRoleId('Marketing', 'Team Member')
+            },
+        }),
+        // Treasury
+        prisma.user.upsert({
+            where: { email: 'andre.treasury@company.com' },
+            update: {},
+            create: {
+                name: 'Andre Joubert',
+                email: 'andre.treasury@company.com',
+                department: 'Treasury',
+                role: 'senior_manager',
+                departmentId: getDeptId('Treasury'),
+                jobRoleId: getRoleId('Treasury', 'Senior Manager')
+            },
+        }),
+        prisma.user.upsert({
+            where: { email: 'fatima.treasury@company.com' },
+            update: {},
+            create: {
+                name: 'Fatima Adams',
+                email: 'fatima.treasury@company.com',
+                department: 'Treasury',
+                role: 'user',
+                departmentId: getDeptId('Treasury'),
+                jobRoleId: getRoleId('Treasury', 'Team Member')
+            },
+        }),
+        // More Finance
+        prisma.user.upsert({
+            where: { email: 'johan.fin@company.com' },
+            update: {},
+            create: {
+                name: 'Johan Steyn',
+                email: 'johan.fin@company.com',
+                department: 'Finance',
+                role: 'user',
+                departmentId: getDeptId('Finance'),
+                jobRoleId: getRoleId('Finance', 'Junior Team Member')
+            },
+        }),
+        // More Operations
+        prisma.user.upsert({
+            where: { email: 'zanele.ops@company.com' },
+            update: {},
+            create: {
+                name: 'Zanele Mthembu',
+                email: 'zanele.ops@company.com',
+                department: 'Operations',
+                role: 'senior_manager',
+                departmentId: getDeptId('Operations'),
+                jobRoleId: getRoleId('Operations', 'Senior Manager')
+            },
+        }),
+        prisma.user.upsert({
+            where: { email: 'grant.ops@company.com' },
+            update: {},
+            create: {
+                name: 'Grant Patterson',
+                email: 'grant.ops@company.com',
+                department: 'Operations',
+                role: 'user',
+                departmentId: getDeptId('Operations'),
+                jobRoleId: getRoleId('Operations', 'Team Member')
+            },
+        }),
+    ]);
+
+    console.log(`✅ Created ${additionalUsers.length} additional users`);
+
+    // ============================================
+    // 9. STAGE-BASED WORKFLOWS
+    // ============================================
+    console.log('Creating stage-based workflows...');
+
+    // Simple 2-stage workflow
+    const simpleWorkflow = await prisma.workflow.upsert({
+        where: { id: 'wf-simple' },
+        update: {},
+        create: {
+            id: 'wf-simple',
+            name: 'Quick Approval Flow',
+            description: 'Simple 2-stage approval for routine payments',
+            status: 'active',
+            creatorId: david.id,
+            approverId: sarah.id,
+        },
+    });
+
+    await prisma.workflowStage.upsert({
+        where: { id: 'stage-simple-1' },
+        update: {},
+        create: {
+            id: 'stage-simple-1',
+            workflowId: simpleWorkflow.id,
+            name: 'Manager Review',
+            order: 0,
+            stageType: 'static',
+            requiredRole: 'manager',
+            approvalMode: 'any',
+            requiredApprovals: 1,
+            slaHours: 24,
+        },
+    });
+
+    await prisma.workflowStage.upsert({
+        where: { id: 'stage-simple-2' },
+        update: {},
+        create: {
+            id: 'stage-simple-2',
+            workflowId: simpleWorkflow.id,
+            name: 'Senior Manager Sign-off',
+            order: 1,
+            stageType: 'static',
+            requiredRole: 'senior_manager',
+            approvalMode: 'any',
+            requiredApprovals: 1,
+            slaHours: 48,
+        },
+    });
+
+    // 3-stage executive workflow
+    const execWorkflow = await prisma.workflow.upsert({
+        where: { id: 'wf-executive' },
+        update: {},
+        create: {
+            id: 'wf-executive',
+            name: 'Executive Approval Chain',
+            description: '3-stage approval for high-value payments',
+            status: 'active',
+            creatorId: sarah.id,
+        },
+    });
+
+    await prisma.workflowStage.upsert({
+        where: { id: 'stage-exec-1' },
+        update: {},
+        create: {
+            id: 'stage-exec-1',
+            workflowId: execWorkflow.id,
+            name: 'Department Manager',
+            order: 0,
+            stageType: 'static',
+            requiredRole: 'manager',
+            approvalMode: 'any',
+            requiredApprovals: 1,
+        },
+    });
+
+    await prisma.workflowStage.upsert({
+        where: { id: 'stage-exec-2' },
+        update: {},
+        create: {
+            id: 'stage-exec-2',
+            workflowId: execWorkflow.id,
+            name: 'Finance Review',
+            order: 1,
+            stageType: 'static',
+            requiredGroupId: tier2Group.id,
+            approvalMode: 'any',
+            requiredApprovals: 1,
+        },
+    });
+
+    await prisma.workflowStage.upsert({
+        where: { id: 'stage-exec-3' },
+        update: {},
+        create: {
+            id: 'stage-exec-3',
+            workflowId: execWorkflow.id,
+            name: 'Executive Approval',
+            order: 2,
+            stageType: 'static',
+            requiredRole: 'executive',
+            approvalMode: 'all',
+            requiredApprovals: 2,
+            slaHours: 72,
+        },
+    });
+
+    console.log(`✅ Created 2 stage-based workflows`);
+
+    // ============================================
+    // 10. SAMPLE PAYMENT REQUESTS
+    // ============================================
+    console.log('Creating sample payment requests...');
+
+    const paymentRequests = await Promise.all([
+        // Pending requests
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-001' },
+            update: {},
+            create: {
+                id: 'req-001',
+                invoiceNumber: 'INV-2026-001',
+                invoiceDate: new Date('2026-01-15'),
+                amount: 15000,
+                currency: 'ZAR',
+                description: 'Office furniture for new workspace',
+                requesterId: james.id,
+                vendorId: vendors[0].id,
+                categoryId: categories[2].id,
+                status: 'pending',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-002' },
+            update: {},
+            create: {
+                id: 'req-002',
+                invoiceNumber: 'INV-2026-002',
+                invoiceDate: new Date('2026-01-18'),
+                amount: 75000,
+                currency: 'ZAR',
+                description: 'Server hardware upgrade',
+                requesterId: lisa.id,
+                vendorId: vendors[1].id,
+                categoryId: categories[0].id,
+                projectId: projects[0].id,
+                status: 'pending',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-003' },
+            update: {},
+            create: {
+                id: 'req-003',
+                invoiceNumber: 'INV-2026-003',
+                invoiceDate: new Date('2026-01-20'),
+                amount: 250000,
+                currency: 'ZAR',
+                description: 'Strategic consulting engagement - Phase 1',
+                requesterId: david.id,
+                vendorId: vendors[2].id,
+                categoryId: categories[4].id,
+                status: 'pending',
+            },
+        }),
+        // Draft requests
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-004' },
+            update: {},
+            create: {
+                id: 'req-004',
+                invoiceNumber: 'INV-2026-004',
+                invoiceDate: new Date('2026-01-22'),
+                amount: 8500,
+                currency: 'ZAR',
+                description: 'Marketing materials for Q1 campaign',
+                requesterId: additionalUsers[2].id,
+                categoryId: categories[1].id,
+                projectId: projects[1].id,
+                status: 'draft',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-005' },
+            update: {},
+            create: {
+                id: 'req-005',
+                invoiceNumber: 'INV-2026-005',
+                invoiceDate: new Date('2026-01-23'),
+                amount: 45000,
+                currency: 'ZAR',
+                description: 'Annual software license renewal',
+                requesterId: lisa.id,
+                vendorId: vendors[1].id,
+                categoryId: categories[0].id,
+                status: 'draft',
+            },
+        }),
+        // Approved requests
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-006' },
+            update: {},
+            create: {
+                id: 'req-006',
+                invoiceNumber: 'INV-2026-006',
+                invoiceDate: new Date('2026-01-10'),
+                amount: 12000,
+                currency: 'ZAR',
+                description: 'Office supplies quarterly order',
+                requesterId: james.id,
+                vendorId: vendors[0].id,
+                categoryId: categories[2].id,
+                status: 'approved',
+                completedAt: new Date('2026-01-12'),
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-007' },
+            update: {},
+            create: {
+                id: 'req-007',
+                invoiceNumber: 'INV-2026-007',
+                invoiceDate: new Date('2026-01-08'),
+                amount: 95000,
+                currency: 'ZAR',
+                description: 'Network equipment installation',
+                requesterId: sipho.id,
+                vendorId: vendors[1].id,
+                categoryId: categories[0].id,
+                projectId: projects[0].id,
+                status: 'approved',
+                completedAt: new Date('2026-01-14'),
+            },
+        }),
+        // Rejected request
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-008' },
+            update: {},
+            create: {
+                id: 'req-008',
+                invoiceNumber: 'INV-2026-008',
+                invoiceDate: new Date('2026-01-05'),
+                amount: 180000,
+                currency: 'ZAR',
+                description: 'Unbudgeted capital expense',
+                requesterId: peter.id,
+                vendorId: vendors[3].id,
+                categoryId: categories[4].id,
+                status: 'rejected',
+                completedAt: new Date('2026-01-07'),
+            },
+        }),
+        // More pending
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-009' },
+            update: {},
+            create: {
+                id: 'req-009',
+                invoiceNumber: 'INV-2026-009',
+                invoiceDate: new Date('2026-01-25'),
+                amount: 32500,
+                currency: 'ZAR',
+                description: 'Employee training program',
+                requesterId: peter.id,
+                categoryId: categories[4].id,
+                status: 'pending',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-010' },
+            update: {},
+            create: {
+                id: 'req-010',
+                invoiceNumber: 'INV-2026-010',
+                invoiceDate: new Date('2026-01-26'),
+                amount: 5500,
+                currency: 'ZAR',
+                description: 'Catering for client meeting',
+                requesterId: additionalUsers[1].id,
+                categoryId: categories[3].id,
+                status: 'pending',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-011' },
+            update: {},
+            create: {
+                id: 'req-011',
+                invoiceNumber: 'INV-2026-011',
+                invoiceDate: new Date('2026-01-27'),
+                amount: 125000,
+                currency: 'USD',
+                description: 'International consulting services',
+                requesterId: david.id,
+                vendorId: vendors[2].id,
+                categoryId: categories[4].id,
+                status: 'pending',
+            },
+        }),
+        prisma.paymentRequest.upsert({
+            where: { id: 'req-012' },
+            update: {},
+            create: {
+                id: 'req-012',
+                invoiceNumber: 'INV-2026-012',
+                invoiceDate: new Date('2026-01-28'),
+                amount: 18750,
+                currency: 'ZAR',
+                description: 'Facility maintenance contract',
+                requesterId: additionalUsers[7].id,
+                vendorId: vendors[0].id,
+                categoryId: categories[2].id,
+                projectId: projects[2].id,
+                status: 'pending',
+            },
+        }),
+    ]);
+
+    console.log(`✅ Created ${paymentRequests.length} payment requests`);
+
+    // ============================================
     // SUMMARY
     // ============================================
     console.log('\n🎉 Seed completed successfully!');
     console.log('-----------------------------------');
     console.log(`📊 Summary:`);
     console.log(`   - User Groups: 4`);
-    console.log(`   - Users: ${users.length}`);
+    console.log(`   - Users: ${users.length + additionalUsers.length}`);
     console.log(`   - Vendors: ${vendors.length}`);
     console.log(`   - Categories: ${categories.length}`);
     console.log(`   - Projects: ${projects.length}`);
-    console.log(`   - Workflows: 3`);
+    console.log(`   - Workflows: 5 (3 rule-based, 2 stage-based)`);
+    console.log(`   - Payment Requests: ${paymentRequests.length}`);
     console.log('-----------------------------------');
 }
 
@@ -587,3 +1150,4 @@ main()
     .finally(async () => {
         await prisma.$disconnect();
     });
+

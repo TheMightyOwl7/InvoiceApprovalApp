@@ -36,7 +36,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     try {
         const { id } = await params;
         const body = await request.json();
-        const { name, email, department } = body;
+        const { name, email, department, departmentId, jobRoleId, role } = body;
 
         // Check user exists
         const existing = await prisma.user.findUnique({
@@ -64,13 +64,26 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             }
         }
 
+        // Resolve names for legacy fields if IDs updated
+        let deptNameUpdate = department;
+        if (departmentId) {
+            const d = await prisma.department.findUnique({ where: { id: departmentId } });
+            if (d) deptNameUpdate = d.name;
+        }
+
+        const updateData: any = {
+            ...(name && { name }),
+            ...(email && { email }),
+            ...(departmentId && { departmentId }),
+            ...(jobRoleId && { jobRoleId }),
+            ...(role && { role }),
+            ...(deptNameUpdate && { department: deptNameUpdate }),
+        };
+
         const user = await prisma.user.update({
             where: { id },
-            data: {
-                ...(name && { name }),
-                ...(email && { email }),
-                ...(department && { department }),
-            },
+            data: updateData,
+            include: { userDepartment: true, jobRole: true }
         });
 
         return NextResponse.json({ success: true, data: user });

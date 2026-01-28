@@ -14,6 +14,9 @@ export async function GET(request: NextRequest) {
         const workflows = await prisma.workflow.findMany({
             where,
             include: {
+                stages: {
+                    orderBy: { order: 'asc' }
+                },
                 rules: {
                     orderBy: { order: 'asc' }
                 },
@@ -41,7 +44,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name, description, rules, creatorId, departmentScope } = body;
+        const { name, description, stages, rules, creatorId, departmentScope } = body;
 
         if (!name || !creatorId) {
             return NextResponse.json(
@@ -62,7 +65,7 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Create workflow with optional rules
+        // Create workflow with optional stages and/or rules
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const workflowData: any = {
             name,
@@ -72,7 +75,29 @@ export async function POST(request: NextRequest) {
             status: 'draft',
         };
 
-        // If rules are provided, create them
+        // New: If stages are provided, create them (new stage-based approach)
+        if (stages && Array.isArray(stages) && stages.length > 0) {
+            workflowData.stages = {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                create: stages.map((stage: any, index: number) => ({
+                    name: stage.name,
+                    description: stage.description,
+                    order: stage.order ?? index,
+                    stageType: stage.stageType || 'static',
+                    requiredRole: stage.requiredRole,
+                    requiredGroupId: stage.requiredGroupId,
+                    specificApproverIds: stage.specificApproverIds,
+                    approvalMode: stage.approvalMode || 'any',
+                    requiredApprovals: stage.requiredApprovals || 1,
+                    slaHours: stage.slaHours,
+                    escalateToGroupId: stage.escalateToGroupId,
+                    conditionType: stage.conditionType,
+                    conditionValue: stage.conditionValue,
+                }))
+            };
+        }
+
+        // Legacy: If rules are provided (backward compatibility)
         if (rules && Array.isArray(rules) && rules.length > 0) {
             workflowData.rules = {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -104,6 +129,7 @@ export async function POST(request: NextRequest) {
         const workflow = await prisma.workflow.create({
             data: workflowData,
             include: {
+                stages: true,
                 rules: true
             }
         });
@@ -117,3 +143,4 @@ export async function POST(request: NextRequest) {
         );
     }
 }
+

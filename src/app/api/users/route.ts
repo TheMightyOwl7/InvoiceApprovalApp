@@ -6,6 +6,7 @@ export async function GET() {
     try {
         const users = await prisma.user.findMany({
             orderBy: { name: 'asc' },
+            include: { userDepartment: true, jobRole: true }
         });
         return NextResponse.json({ success: true, data: users });
     } catch (error) {
@@ -21,12 +22,12 @@ export async function GET() {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name, email, department } = body;
+        const { name, email, department, departmentId, jobRoleId } = body;
 
         // Basic validation
-        if (!name || !email || !department) {
+        if (!name || !email) {
             return NextResponse.json(
-                { success: false, error: 'Name, email, and department are required' },
+                { success: false, error: 'Name and email are required' },
                 { status: 400 }
             );
         }
@@ -43,8 +44,32 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // Resolve legacy fields if new IDs provided
+        let deptName = department;
+        let roleName = 'user'; // default
+
+        if (departmentId && !deptName) {
+            const d = await prisma.department.findUnique({ where: { id: departmentId } });
+            if (d) deptName = d.name;
+        }
+
+        if (jobRoleId) {
+            const r = await prisma.jobRole.findUnique({ where: { id: jobRoleId } });
+            if (r) roleName = r.name; // Use role name as legacy role string
+            // Map legacy role levels if needed, or just use name.
+            // Existing logic uses: executive, senior_manager, manager, user
+            // We might need a mapper here, but for now let's trust the input or default.
+        }
+
         const user = await prisma.user.create({
-            data: { name, email, department },
+            data: {
+                name,
+                email,
+                department: deptName || 'Unassigned',
+                departmentId,
+                jobRoleId,
+                role: roleName
+            },
         });
 
         return NextResponse.json({ success: true, data: user }, { status: 201 });

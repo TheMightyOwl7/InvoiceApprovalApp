@@ -2,25 +2,44 @@
 
 import { useState, useEffect } from 'react';
 import { getCurrentUser, setCurrentUser, type CurrentUserContext } from '@/lib/storage';
+import DepartmentManager from '@/components/DepartmentManager';
+
+interface JobRole {
+    id: string;
+    name: string;
+    level: number;
+}
+
+interface Department {
+    id: string;
+    name: string;
+}
 
 interface User {
     id: string;
     name: string;
     email: string;
     department: string;
+    role: string;
+    departmentId?: string;
+    jobRoleId?: string;
+    userDepartment?: Department;
+    jobRole?: JobRole;
     createdAt: string;
 }
 
 interface FormData {
     name: string;
     email: string;
-    department: string;
+    departmentId: string;
+    jobRoleId: string;
 }
 
 const initialFormData: FormData = {
     name: '',
     email: '',
-    department: '',
+    departmentId: '',
+    jobRoleId: '',
 };
 
 function UserNode({
@@ -40,6 +59,10 @@ function UserNode({
     onSelect: (u: User) => void;
     getInitials: (n: string) => string;
 }) {
+    // resolve display values
+    const deptName = user.userDepartment?.name || user.department;
+    const roleName = user.jobRole?.name || user.role;
+
     return (
         <div className={`user-node ${isExec ? 'exec' : ''} ${isActive ? 'active' : ''}`}>
             {isActive && <div className="current-badge">Current</div>}
@@ -49,6 +72,9 @@ function UserNode({
             <div className="user-node-info">
                 <div className="user-node-name">{user.name}</div>
                 <div className="user-node-email">{user.email}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                    {deptName} • {roleName}
+                </div>
             </div>
             <div className="user-node-actions">
                 <button
@@ -80,19 +106,37 @@ function UserNode({
 
 export default function UsersPage() {
     const [users, setUsers] = useState<User[]>([]);
+    const [departments, setDepartments] = useState<Department[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [showModal, setShowModal] = useState(false);
+
+    // Modals
+    const [showUserModal, setShowUserModal] = useState(false);
+    const [showDeptManager, setShowDeptManager] = useState(false);
+
+    // Form & Editing
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [formData, setFormData] = useState<FormData>(initialFormData);
+    const [rolesForForm, setRolesForForm] = useState<JobRole[]>([]);
+
     const [saving, setSaving] = useState(false);
     const [activeUserId, setActiveUserId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchUsers();
+        fetchDepartments();
         const current = getCurrentUser();
         if (current) setActiveUserId(current.userId);
     }, []);
+
+    // When department changes in form, fetch roles
+    useEffect(() => {
+        if (formData.departmentId) {
+            fetchRoles(formData.departmentId);
+        } else {
+            setRolesForForm([]);
+        }
+    }, [formData.departmentId]);
 
     async function fetchUsers() {
         try {
@@ -111,10 +155,30 @@ export default function UsersPage() {
         }
     }
 
+    async function fetchDepartments() {
+        try {
+            const res = await fetch('/api/departments');
+            const data = await res.json();
+            if (data.success) setDepartments(data.data);
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function fetchRoles(deptId: string) {
+        try {
+            const res = await fetch(`/api/departments/${deptId}/roles`);
+            const data = await res.json();
+            if (data.success) setRolesForForm(data.data);
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
     function openAddModal() {
         setEditingUser(null);
         setFormData(initialFormData);
-        setShowModal(true);
+        setShowUserModal(true);
     }
 
     function openEditModal(user: User) {
@@ -122,13 +186,16 @@ export default function UsersPage() {
         setFormData({
             name: user.name,
             email: user.email,
-            department: user.department,
+            departmentId: user.departmentId || '', // Handle legacy/missing
+            jobRoleId: user.jobRoleId || '',
         });
-        setShowModal(true);
+        // If legacy user without ID but with string, we might need manual mapping or let them pick again
+        // Ideally seed handles this.
+        setShowUserModal(true);
     }
 
     function closeModal() {
-        setShowModal(false);
+        setShowUserModal(false);
         setEditingUser(null);
         setFormData(initialFormData);
         setError(null);
@@ -143,10 +210,17 @@ export default function UsersPage() {
             const url = editingUser ? `/api/users/${editingUser.id}` : '/api/users';
             const method = editingUser ? 'PATCH' : 'POST';
 
+            // Find names for optimistic update / legacy fields
+            const dept = departments.find(d => d.id === formData.departmentId);
+            const body = {
+                ...formData,
+                department: dept?.name || 'Unassigned', // legacy fallback
+            };
+
             const res = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData),
+                body: JSON.stringify(body),
             });
 
             const data = await res.json();
@@ -173,7 +247,6 @@ export default function UsersPage() {
             const res = await fetch(`/api/users/${user.id}`, {
                 method: 'DELETE',
             });
-
             const data = await res.json();
 
             if (data.success) {
@@ -193,7 +266,6 @@ export default function UsersPage() {
         };
         setCurrentUser(userContext);
         setActiveUserId(user.id);
-        // Refresh to update entire app context
         window.location.reload();
     }
 
@@ -206,194 +278,123 @@ export default function UsersPage() {
             .slice(0, 2);
     }
 
-    function getSeniorityRank(name: string): number {
-        if (name.includes('(Exec)')) return 0;
-        if (name.toLowerCase().includes('exec')) return 0;
-        if (name.includes('(Sr. Manager)')) return 1;
-        if (name.toLowerCase().includes('senior manager')) return 1;
-        if (name.includes('(Manager)')) return 2;
-        if (name.toLowerCase().includes('manager')) return 2;
-        if (name.includes('(Senior)')) return 3;
-        if (name.toLowerCase().includes('senior')) return 3;
-        return 4; // Junior or default
+    function getHierarchyLevel(user: User): number {
+        // Higher level number = Higher Rank in seed (5=Exec, 1=Junior)
+        // We want to SORT by rank descending (Exec first)
+        if (user.jobRole?.level) return user.jobRole.level;
+
+        // Fallback for legacy text
+        const name = user.role || user.jobRole?.name || '';
+        if (name.includes('executive') || name.includes('Exec')) return 5;
+        if (name.includes('senior_manager') || name.includes('Senior Manager')) return 4;
+        if (name.includes('manager') || name.includes('Manager')) return 3;
+        if (name.includes('Team Member')) return 2;
+        return 1; // Junior/User
     }
 
     // Grouping logic
-    const departments = Array.from(new Set(users.map(u => u.department))).sort();
+    // We group by Department NAME (either from relation or string)
+    const usersByDepartment: Record<string, User[]> = {};
+    const deptNamesSet = new Set<string>();
 
-    const usersByDepartment = departments.reduce((acc, dept) => {
-        const deptUsers = users.filter(u => u.department === dept);
+    // First, add all known API departments to order them nicely?
+    // Or just iterate users. Let's iterate users.
+    users.forEach(u => {
+        const dName = u.userDepartment?.name || u.department || 'Unassigned';
+        if (!usersByDepartment[dName]) usersByDepartment[dName] = [];
+        usersByDepartment[dName].push(u);
+        deptNamesSet.add(dName);
+    });
 
-        // Sort within department: Exec > Senior > Junior
-        deptUsers.sort((a, b) => {
-            const rankA = getSeniorityRank(a.name);
-            const rankB = getSeniorityRank(b.name);
-            if (rankA !== rankB) return rankA - rankB;
+    const sortedDeptNames = Array.from(deptNamesSet).sort();
+
+    // Sort users within department
+    Object.keys(usersByDepartment).forEach(dName => {
+        usersByDepartment[dName].sort((a, b) => {
+            const levelA = getHierarchyLevel(a);
+            const levelB = getHierarchyLevel(b);
+            // Sort Descending by Level (5 -> 1)
+            if (levelA !== levelB) return levelB - levelA;
             return a.name.localeCompare(b.name);
         });
-
-        acc[dept] = deptUsers;
-        return acc;
-    }, {} as Record<string, User[]>);
+    });
 
     return (
         <div>
             <div className="page-header">
                 <h1 className="page-title">Manage Users</h1>
-                <button className="btn btn-primary" onClick={openAddModal}>
-                    ➕ Add User
-                </button>
+                <div className="flex gap-2">
+                    <button className="btn btn-secondary" onClick={() => setShowDeptManager(true)}>
+                        🏢 Departments
+                    </button>
+                    <button className="btn btn-primary" onClick={openAddModal}>
+                        ➕ Add User
+                    </button>
+                </div>
             </div>
 
             {loading ? (
-                <div className="empty-state">
-                    <p>Loading users...</p>
-                </div>
+                <div className="empty-state"><p>Loading users...</p></div>
             ) : users.length === 0 ? (
                 <div className="card">
                     <div className="card-body">
                         <div className="empty-state">
                             <div className="empty-state-icon">👥</div>
                             <div className="empty-state-title">No users yet</div>
-                            <p>Add your first user to get started with payment approvals.</p>
-                            <button className="btn btn-primary mt-md" onClick={openAddModal}>
-                                ➕ Add First User
-                            </button>
+                            <button className="btn btn-primary mt-md" onClick={openAddModal}>➕ Add First User</button>
                         </div>
                     </div>
                 </div>
             ) : (
                 <div className="department-grid">
-                    {departments.map(dept => (
+                    {sortedDeptNames.map(dept => (
                         <div key={dept} className="dept-card">
                             <div className="dept-header">
                                 <span className="dept-title">{dept}</span>
                                 <span className="dept-count">{usersByDepartment[dept].length} users</span>
                             </div>
                             <div className="dept-body">
-                                {/* Executives */}
-                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 0) && (
-                                    <div className="hierarchy-section">
-                                        <div className="hierarchy-label">Leadership</div>
-                                        {usersByDepartment[dept]
-                                            .filter(u => getSeniorityRank(u.name) === 0)
-                                            .map(user => (
-                                                <UserNode
-                                                    key={user.id}
-                                                    user={user}
-                                                    isExec
-                                                    isActive={user.id === activeUserId}
-                                                    onEdit={openEditModal}
-                                                    onDelete={handleDelete}
-                                                    onSelect={handleSelectUser}
-                                                    getInitials={getInitials}
-                                                />
-                                            ))}
-                                    </div>
-                                )}
-
-                                {/* Senior Managers */}
-                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 1) && (
-                                    <div className="hierarchy-section">
-                                        <div className="hierarchy-label">Senior Management</div>
-                                        {usersByDepartment[dept]
-                                            .filter(u => getSeniorityRank(u.name) === 1)
-                                            .map(user => (
-                                                <UserNode
-                                                    key={user.id}
-                                                    user={user}
-                                                    isActive={user.id === activeUserId}
-                                                    onEdit={openEditModal}
-                                                    onDelete={handleDelete}
-                                                    onSelect={handleSelectUser}
-                                                    getInitials={getInitials}
-                                                />
-                                            ))}
-                                    </div>
-                                )}
-
-                                {/* Managers */}
-                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 2) && (
-                                    <div className="hierarchy-section">
-                                        <div className="hierarchy-label">Management</div>
-                                        {usersByDepartment[dept]
-                                            .filter(u => getSeniorityRank(u.name) === 2)
-                                            .map(user => (
-                                                <UserNode
-                                                    key={user.id}
-                                                    user={user}
-                                                    isActive={user.id === activeUserId}
-                                                    onEdit={openEditModal}
-                                                    onDelete={handleDelete}
-                                                    onSelect={handleSelectUser}
-                                                    getInitials={getInitials}
-                                                />
-                                            ))}
-                                    </div>
-                                )}
-
-                                {/* Seniors */}
-                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 3) && (
-                                    <div className="hierarchy-section">
-                                        <div className="hierarchy-label">Senior Staff</div>
-                                        {usersByDepartment[dept]
-                                            .filter(u => getSeniorityRank(u.name) === 3)
-                                            .map(user => (
-                                                <UserNode
-                                                    key={user.id}
-                                                    user={user}
-                                                    isActive={user.id === activeUserId}
-                                                    onEdit={openEditModal}
-                                                    onDelete={handleDelete}
-                                                    onSelect={handleSelectUser}
-                                                    getInitials={getInitials}
-                                                />
-                                            ))}
-                                    </div>
-                                )}
-
-                                {/* Juniors / Others */}
-                                {usersByDepartment[dept].some(u => getSeniorityRank(u.name) === 4) && (
-                                    <div className="hierarchy-section">
-                                        <div className="hierarchy-label">Team Members</div>
-                                        {usersByDepartment[dept]
-                                            .filter(u => getSeniorityRank(u.name) === 4)
-                                            .map(user => (
-                                                <UserNode
-                                                    key={user.id}
-                                                    user={user}
-                                                    isActive={user.id === activeUserId}
-                                                    onEdit={openEditModal}
-                                                    onDelete={handleDelete}
-                                                    onSelect={handleSelectUser}
-                                                    getInitials={getInitials}
-                                                />
-                                            ))}
-                                    </div>
-                                )}
+                                {usersByDepartment[dept].map(user => (
+                                    <UserNode
+                                        key={user.id}
+                                        user={user}
+                                        isExec={getHierarchyLevel(user) >= 5}
+                                        isActive={user.id === activeUserId}
+                                        onEdit={openEditModal}
+                                        onDelete={handleDelete}
+                                        onSelect={handleSelectUser}
+                                        getInitials={getInitials}
+                                    />
+                                ))}
                             </div>
                         </div>
                     ))}
                 </div>
             )}
 
-            {/* Add/Edit Modal */}
-            {showModal && (
+            {/* Department Manager Modal */}
+            <DepartmentManager
+                isOpen={showDeptManager}
+                onClose={() => setShowDeptManager(false)}
+                onChange={() => {
+                    fetchDepartments();
+                    fetchUsers(); // Refresh users in case dept names changed
+                }}
+            />
+
+            {/* Add/Edit User Modal */}
+            {showUserModal && (
                 <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeModal()}>
                     <div className="modal">
                         <div className="modal-header">
-                            <h2 className="modal-title">
-                                {editingUser ? 'Edit User' : 'Add New User'}
-                            </h2>
-                            <button className="modal-close" onClick={closeModal}>
-                                ×
-                            </button>
+                            <h2 className="modal-title">{editingUser ? 'Edit User' : 'Add New User'}</h2>
+                            <button className="modal-close" onClick={closeModal}>×</button>
                         </div>
 
                         <form onSubmit={handleSubmit}>
                             <div className="modal-body">
                                 {error && (
-                                    <div className="form-error mb-md" style={{ padding: 'var(--spacing-sm)', background: 'var(--color-danger-light)', borderRadius: 'var(--radius)' }}>
+                                    <div className="form-error mb-md" style={{ padding: '8px', background: '#fee', borderRadius: '4px', color: 'red' }}>
                                         {error}
                                     </div>
                                 )}
@@ -405,7 +406,6 @@ export default function UsersPage() {
                                         className="form-input"
                                         value={formData.name}
                                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                        placeholder="John Smith"
                                         required
                                     />
                                 </div>
@@ -417,28 +417,46 @@ export default function UsersPage() {
                                         className="form-input"
                                         value={formData.email}
                                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                        placeholder="john@company.com"
                                         required
                                     />
                                 </div>
 
                                 <div className="form-group">
                                     <label className="form-label">Department *</label>
-                                    <input
-                                        type="text"
+                                    <div className="flex gap-2">
+                                        <select
+                                            className="form-input"
+                                            value={formData.departmentId}
+                                            onChange={(e) => setFormData({ ...formData, departmentId: e.target.value, jobRoleId: '' })}
+                                            required
+                                        >
+                                            <option value="">Select Department...</option>
+                                            {departments.map(d => (
+                                                <option key={d.id} value={d.id}>{d.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="form-group">
+                                    <label className="form-label">Role *</label>
+                                    <select
                                         className="form-input"
-                                        value={formData.department}
-                                        onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                                        placeholder="Finance"
+                                        value={formData.jobRoleId}
+                                        onChange={(e) => setFormData({ ...formData, jobRoleId: e.target.value })}
                                         required
-                                    />
+                                        disabled={!formData.departmentId}
+                                    >
+                                        <option value="">Select Role...</option>
+                                        {rolesForForm.map(r => (
+                                            <option key={r.id} value={r.id}>{r.name} (Lvl {r.level})</option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
 
                             <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={closeModal}>
-                                    Cancel
-                                </button>
+                                <button type="button" className="btn btn-secondary" onClick={closeModal}>Cancel</button>
                                 <button type="submit" className="btn btn-primary" disabled={saving}>
                                     {saving ? 'Saving...' : editingUser ? 'Update User' : 'Add User'}
                                 </button>

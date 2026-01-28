@@ -172,7 +172,8 @@ export async function POST(request: NextRequest) {
                 poAmount: poAmount ? parseFloat(poAmount) : null,
                 quoteRef,
                 quoteAmount: quoteAmount ? parseFloat(quoteAmount) : null,
-                workflowId,
+                // Only set workflowId if explicitly provided and valid
+                ...(workflowId ? { workflowId } : {}),
                 status,
             },
             include: {
