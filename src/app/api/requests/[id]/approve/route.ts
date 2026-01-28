@@ -115,7 +115,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         }
         // No specific requirement - anyone with manager+ role can approve
         else {
-            canApproveStep = ['manager', 'senior_manager', 'executive'].includes(approver.role);
+            canApproveStep = approver.role ? ['manager', 'senior_manager', 'executive'].includes(approver.role) : false;
         }
 
         if (!canApproveStep) {
