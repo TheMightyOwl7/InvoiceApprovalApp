@@ -909,7 +909,7 @@ export default function NewRequestPage() {
                                 <option value="">No specific workflow (Manual Approval)</option>
                                 {activeWorkflows.map((wf) => (
                                     <option key={wf.id} value={wf.id}>
-                                        {wf.name} ({wf.steps.length} steps)
+                                        {wf.name} ({(wf.rules || []).length} steps)
                                     </option>
                                 ))}
                             </select>
